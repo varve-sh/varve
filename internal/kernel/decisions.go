@@ -1,0 +1,1114 @@
+package kernel
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/memtrace-dev/memtrace/internal/scope"
+	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/memtrace-dev/memtrace/internal/util"
+)
+
+// DecisionStore owns the governed half of the schema: decisions, evidence and
+// the event log.
+//
+// Every mutating method here runs in one transaction that contains both the
+// state change and the event describing it. ADR-0001 §D7 makes that pairing a
+// kernel responsibility and states it explicitly; the only documented
+// exception is the v1→v2 migration, which writes a single migration.completed
+// event rather than fabricating per-row histories it never observed.
+type DecisionStore struct {
+	db *sql.DB
+}
+
+// NewDecisionStore returns a store over an already-migrated database.
+func NewDecisionStore(db *sql.DB) *DecisionStore { return &DecisionStore{db: db} }
+
+// DB exposes the underlying handle for callers that need their own transaction
+// (the v1→v2 migration does).
+func (s *DecisionStore) DB() *sql.DB { return s.db }
+
+const decisionColumns = `id, project_id, kind, title, body, status, scope, confidence,
+	source, source_ref, agent, model, session_id, expires_at, topic_key, tags,
+	supersedes, superseded_by, embedding, created_at, updated_at, decided_at,
+	status_changed_at, accessed_at, access_count`
+
+// DecisionInput is a new decision. Lifecycle fields are not settable by the
+// caller: birth state is determined by Source (D2).
+type DecisionInput struct {
+	ProjectID  string
+	Kind       types.DecisionKind
+	Title      string
+	Body       string
+	Scope      []string
+	Confidence float64
+	Source     types.DecisionSource
+	SourceRef  string
+	Agent      string
+	Model      string
+	SessionID  string
+	ExpiresAt  *time.Time
+	TopicKey   string
+	Tags       []string
+	Supersedes []string
+	// Via records the channel on the decision.proposed event
+	// ("mcp"|"cli"|"import"|"derived"). Defaults from Source.
+	Via string
+	// Evidence is attached in the same transaction as the proposal.
+	Evidence []EvidenceInput
+}
+
+// EvidenceInput is one evidence row. Accepting is never set by the caller: the
+// kernel sets it, in the acceptance transaction, on the rows that exist at the
+// proposed→active transition (D4).
+type EvidenceInput struct {
+	Kind    types.EvidenceKind
+	Ref     string
+	Note    string
+	AddedBy types.Actor
+}
+
+func defaultVia(src types.DecisionSource) string {
+	switch src {
+	case types.DecisionSourceAgent:
+		return "mcp"
+	case types.DecisionSourceUser:
+		return "cli"
+	case types.DecisionSourceDerived:
+		return "derived"
+	default:
+		return "import"
+	}
+}
+
+func actorFor(src types.DecisionSource) types.Actor {
+	switch src {
+	case types.DecisionSourceUser:
+		return types.ActorHuman
+	case types.DecisionSourceAgent:
+		return types.ActorAgent
+	default:
+		return types.ActorSystem
+	}
+}
+
+func (in *DecisionInput) applyDefaults() {
+	if in.Kind == "" {
+		in.Kind = types.DecisionKindDecision
+	}
+	if in.Source == "" {
+		in.Source = types.DecisionSourceUser
+	}
+	if in.Confidence == 0 {
+		in.Confidence = 1.0
+	}
+	if in.Scope == nil {
+		in.Scope = []string{}
+	}
+	if in.Tags == nil {
+		in.Tags = []string{}
+	}
+	if in.Supersedes == nil {
+		in.Supersedes = []string{}
+	}
+	if in.Via == "" {
+		in.Via = defaultVia(in.Source)
+	}
+}
+
+func (in *DecisionInput) validate() error {
+	if in.ProjectID == "" {
+		return &types.ValidationError{Field: "project_id", Message: "must not be empty"}
+	}
+	if l := len([]rune(in.Title)); l < 1 || l > 200 {
+		return &types.ValidationError{Field: "title", Message: "must be 1–200 characters"}
+	}
+	switch in.Kind {
+	case types.DecisionKindDecision, types.DecisionKindConvention:
+	default:
+		return &types.ValidationError{Field: "kind", Message: "must be decision or convention"}
+	}
+	switch in.Source {
+	case types.DecisionSourceUser, types.DecisionSourceAgent, types.DecisionSourceGit,
+		types.DecisionSourceImport, types.DecisionSourceDerived:
+	default:
+		return &types.ValidationError{Field: "source", Message: "unknown source"}
+	}
+	if in.Confidence < 0 || in.Confidence > 1 {
+		return &types.ValidationError{Field: "confidence", Message: "must be between 0.0 and 1.0"}
+	}
+	// D4: the MCP path always carries provenance; a save claiming to come from
+	// an agent without a session cannot be attributed and is rejected.
+	if in.Source == types.DecisionSourceAgent && in.SessionID == "" {
+		return &types.ValidationError{Field: "session_id", Message: "required for agent-sourced decisions"}
+	}
+	if err := scope.Validate(in.Scope); err != nil {
+		return err
+	}
+	for _, e := range in.Evidence {
+		if err := e.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *EvidenceInput) validate() error {
+	switch e.Kind {
+	case types.EvidenceKindCommit, types.EvidenceKindPR, types.EvidenceKindTest,
+		types.EvidenceKindFile, types.EvidenceKindURL, types.EvidenceKindImport:
+	default:
+		return &types.ValidationError{Field: "evidence.kind", Message: "unknown evidence kind"}
+	}
+	if e.Ref == "" {
+		return &types.ValidationError{Field: "evidence.ref", Message: "must not be empty"}
+	}
+	switch e.AddedBy {
+	case types.ActorHuman, types.ActorAgent, types.ActorSystem:
+	default:
+		return &types.ValidationError{Field: "evidence.added_by", Message: "must be human, agent or system"}
+	}
+	return nil
+}
+
+// Propose creates a decision in `proposed`, the mandatory entry state (D2),
+// and emits decision.proposed in the same transaction.
+//
+// A decision is *always* born proposed, including one whose source is `user`.
+// D2 permits a human-sourced decision to be born active because "the human is
+// the confirmation"; that is implemented as ProposeAccepted, which runs the
+// real proposed→active transition inside one transaction. Modelling it as a
+// transition rather than as a second birth state keeps the state machine and
+// the event catalogue exactly as specified: acceptance emits
+// decision.accepted, which is D4's audit witness for forced (unevidenced)
+// acceptances, and no active row exists without one.
+func (s *DecisionStore) Propose(in DecisionInput) (*types.Decision, error) {
+	in.applyDefaults()
+	if err := in.validate(); err != nil {
+		return nil, err
+	}
+
+	var out *types.Decision
+	err := s.withTx(func(tx *sql.Tx) error {
+		d, err := s.proposeTx(tx, &in)
+		out = d
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decision, error) {
+	now := time.Now().UTC()
+
+	// D4: saving under an existing topic_key does not upsert in place. It
+	// creates a proposed successor with `supersedes` pre-linked to the current
+	// non-terminal holder; acceptance completes the supersession (D5).
+	//
+	// NOTE — reconciled conflict inside D4, objection logged in
+	// planning/decisions-log.md (2026-07-28, "topic_key successor collides with
+	// its own uniqueness index"). D4 asks for a *proposed* successor while
+	// idx_decisions_topic_key is unique across `proposed`, `active` and
+	// `violated`: the successor row cannot carry the key while the predecessor
+	// still holds it. Both sentences hold only if the key transfers at
+	// acceptance, which is what "acceptance completes the supersession" means
+	// here. Implemented with the structures the ADR already provides: the
+	// pending key rides on the decision.proposed payload (a key D7 specifies)
+	// and acceptTx applies it to the row once the predecessors are terminal.
+	pendingTopicKey := ""
+	if in.TopicKey != "" {
+		var holder string
+		err := tx.QueryRow(`
+			SELECT id FROM decisions
+			 WHERE project_id = ? AND topic_key = ?
+			   AND status IN ('proposed','active','violated')`,
+			in.ProjectID, in.TopicKey).Scan(&holder)
+		switch {
+		case err == nil:
+			if !containsString(in.Supersedes, holder) {
+				in.Supersedes = append(in.Supersedes, holder)
+			}
+			pendingTopicKey = in.TopicKey
+			in.TopicKey = ""
+		case errors.Is(err, sql.ErrNoRows):
+		default:
+			return nil, fmt.Errorf("topic_key lookup: %w", err)
+		}
+	}
+
+	for _, id := range in.Supersedes {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM decisions WHERE id = ?`, id).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("%w: supersedes references %s", types.ErrDecisionNotFound, id)
+		}
+	}
+
+	d := &types.Decision{
+		ID:              util.GenerateID(),
+		ProjectID:       in.ProjectID,
+		Kind:            in.Kind,
+		Title:           in.Title,
+		Body:            in.Body,
+		Status:          types.StatusProposed,
+		Scope:           in.Scope,
+		Confidence:      in.Confidence,
+		Source:          in.Source,
+		SourceRef:       in.SourceRef,
+		Agent:           in.Agent,
+		Model:           in.Model,
+		SessionID:       in.SessionID,
+		ExpiresAt:       in.ExpiresAt,
+		TopicKey:        in.TopicKey,
+		Tags:            in.Tags,
+		Supersedes:      in.Supersedes,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		StatusChangedAt: now,
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO decisions (`+decisionColumns+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		d.ID, d.ProjectID, string(d.Kind), d.Title, d.Body, string(d.Status),
+		mustJSON(d.Scope), d.Confidence, string(d.Source), nullableString(d.SourceRef),
+		nullableString(d.Agent), nullableString(d.Model), nullableString(d.SessionID),
+		nullableTime(d.ExpiresAt), nullableString(d.TopicKey), mustJSON(d.Tags),
+		mustJSON(d.Supersedes), nil, nil,
+		fmtTime(d.CreatedAt), fmtTime(d.UpdatedAt), nil, fmtTime(d.StatusChangedAt), nil, 0,
+	); err != nil {
+		return nil, fmt.Errorf("inserting decision: %w", err)
+	}
+
+	for _, e := range in.Evidence {
+		if _, err := insertEvidence(tx, d.ID, e, false, now); err != nil {
+			return nil, err
+		}
+	}
+
+	payload := map[string]any{"via": in.Via}
+	switch {
+	case d.TopicKey != "":
+		payload["topic_key"] = d.TopicKey
+	case pendingTopicKey != "":
+		payload["topic_key"] = pendingTopicKey
+	}
+	if _, err := appendEvent(tx, EventInput{
+		ProjectID:  d.ProjectID,
+		Kind:       types.EventDecisionProposed,
+		Actor:      actorFor(d.Source),
+		DecisionID: d.ID,
+		SessionID:  d.SessionID,
+		Agent:      d.Agent,
+		Model:      d.Model,
+		Payload:    payload,
+	}); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// AcceptOptions controls a proposed→active transition.
+type AcceptOptions struct {
+	// Force bypasses the evidence requirement. The bypass is recorded in the
+	// decision.accepted payload as "forced": true — the audit trail shows
+	// exactly which decisions are unevidenced (D4).
+	Force bool
+	// Actor defaults to human. Acceptance is a human action by design: an
+	// agent asserting "the user approved" is the assertion the quarantine
+	// exists to distrust (D2, open question 3).
+	Actor types.Actor
+}
+
+// ProposeAccepted creates and immediately accepts a decision in one
+// transaction. This is D2's "human-sourced decisions may be born active".
+func (s *DecisionStore) ProposeAccepted(in DecisionInput, opts AcceptOptions) (*types.Decision, error) {
+	in.applyDefaults()
+	if err := in.validate(); err != nil {
+		return nil, err
+	}
+	if in.Source != types.DecisionSourceUser {
+		return nil, &types.ValidationError{
+			Field:   "source",
+			Message: "only user-sourced decisions may be born active; everything else is quarantined as proposed",
+		}
+	}
+
+	var out *types.Decision
+	err := s.withTx(func(tx *sql.Tx) error {
+		d, err := s.proposeTx(tx, &in)
+		if err != nil {
+			return err
+		}
+		if err := s.acceptTx(tx, d, opts); err != nil {
+			return err
+		}
+		out = d
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Accept performs proposed→active: it requires at least one evidence row
+// (unless forced), marks every evidence row present at this moment as
+// accepting, supersedes the rows named in `supersedes`, and emits
+// decision.accepted plus one decision.superseded per predecessor — all in one
+// transaction (D4, D5, D7).
+func (s *DecisionStore) Accept(id string, opts AcceptOptions) (*types.Decision, error) {
+	var out *types.Decision
+	err := s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if err := s.acceptTx(tx, d, opts); err != nil {
+			return err
+		}
+		out = d
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *DecisionStore) acceptTx(tx *sql.Tx, d *types.Decision, opts AcceptOptions) error {
+	if err := types.CheckTransition(d.Status, types.StatusActive); err != nil {
+		return err
+	}
+	if opts.Actor == "" {
+		opts.Actor = types.ActorHuman
+	}
+
+	var evidenceCount int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM evidence WHERE decision_id = ?`, d.ID).
+		Scan(&evidenceCount); err != nil {
+		return err
+	}
+	if evidenceCount == 0 && !opts.Force {
+		return types.ErrNoEvidence
+	}
+
+	// The accepting set is a fact about one moment: rows attached later stay 0
+	// and are never retroactively promoted (D4).
+	if _, err := tx.Exec(`UPDATE evidence SET accepting = 1 WHERE decision_id = ?`, d.ID); err != nil {
+		return fmt.Errorf("marking accepting evidence: %w", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := tx.Exec(`
+		UPDATE decisions
+		   SET status = 'active', decided_at = COALESCE(decided_at, ?),
+		       status_changed_at = ?, updated_at = ?
+		 WHERE id = ?`, fmtTime(now), fmtTime(now), fmtTime(now), d.ID); err != nil {
+		return fmt.Errorf("accepting decision: %w", err)
+	}
+	d.Status = types.StatusActive
+	d.DecidedAt = &now
+	d.StatusChangedAt = now
+	d.UpdatedAt = now
+
+	if _, err := appendEvent(tx, EventInput{
+		ProjectID:  d.ProjectID,
+		Kind:       types.EventDecisionAccepted,
+		Actor:      opts.Actor,
+		DecisionID: d.ID,
+		Payload:    map[string]any{"evidence_count": evidenceCount, "forced": opts.Force},
+	}); err != nil {
+		return err
+	}
+
+	// D5: predecessors that are still non-terminal become superseded now.
+	// Already-terminal rows named in `supersedes` are left untouched — the
+	// link is informational.
+	for _, predID := range d.Supersedes {
+		pred, err := loadDecisionTx(tx, predID)
+		if err != nil {
+			return err
+		}
+		if pred.Status.IsTerminal() {
+			continue
+		}
+		if _, err := tx.Exec(`
+			UPDATE decisions
+			   SET status = 'superseded', superseded_by = ?, status_changed_at = ?, updated_at = ?
+			 WHERE id = ?`, d.ID, fmtTime(now), fmtTime(now), predID); err != nil {
+			return fmt.Errorf("superseding %s: %w", predID, err)
+		}
+		if _, err := appendEvent(tx, EventInput{
+			ProjectID:  pred.ProjectID,
+			Kind:       types.EventDecisionSuperseded,
+			Actor:      types.ActorSystem,
+			DecisionID: predID,
+			Payload:    map[string]any{"successor_id": d.ID},
+		}); err != nil {
+			return err
+		}
+	}
+
+	return applyPendingTopicKeyTx(tx, d)
+}
+
+// applyPendingTopicKeyTx transfers a topic_key that could not be written at
+// proposal time because the predecessor still held it. See the note in
+// proposeTx. Runs after the predecessors are terminal, so the partial unique
+// index is satisfied.
+func applyPendingTopicKeyTx(tx *sql.Tx, d *types.Decision) error {
+	if d.TopicKey != "" {
+		return nil
+	}
+	var payload string
+	err := tx.QueryRow(`
+		SELECT payload FROM events
+		 WHERE decision_id = ? AND kind = 'decision.proposed'
+		 ORDER BY seq LIMIT 1`, d.ID).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var p struct {
+		TopicKey string `json:"topic_key"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil || p.TopicKey == "" {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE decisions SET topic_key = ? WHERE id = ?`, p.TopicKey, d.ID); err != nil {
+		return fmt.Errorf("transferring topic_key %q: %w", p.TopicKey, err)
+	}
+	d.TopicKey = p.TopicKey
+	return nil
+}
+
+// Reject performs proposed→rejected: a human declining a proposal. The audit
+// record survives; nothing is deleted (D2).
+func (s *DecisionStore) Reject(id, reason string) error {
+	return s.transition(id, types.StatusRejected, types.EventDecisionRejected, types.ActorHuman,
+		func(d *types.Decision) map[string]any {
+			p := map[string]any{}
+			if reason != "" {
+				p["reason"] = reason
+			}
+			return p
+		}, "")
+}
+
+// RevertOptions describes why a decision was undone.
+type RevertOptions struct {
+	// Via is "revert_detected" (the accepting evidence commit was reverted) or
+	// "human" (an explicit repeal).
+	Via string
+	// RevertedEvidenceRef is the accepting evidence ref that was reverted.
+	RevertedEvidenceRef string
+	// CommitSHA is the reverting commit, set when Via is revert_detected.
+	CommitSHA string
+	Actor     types.Actor
+}
+
+// Revert moves an active or violated decision to the terminal `reverted`
+// state. D6 narrows the automatic rule to *accepting* evidence: a revert of a
+// non-accepting evidence commit produces a violation, not a revert.
+func (s *DecisionStore) Revert(id string, opts RevertOptions) error {
+	if opts.Via == "" {
+		opts.Via = "human"
+	}
+	actor := opts.Actor
+	if actor == "" {
+		if opts.Via == "revert_detected" {
+			actor = types.ActorSystem
+		} else {
+			actor = types.ActorHuman
+		}
+	}
+	return s.transition(id, types.StatusReverted, types.EventDecisionReverted, actor,
+		func(d *types.Decision) map[string]any {
+			p := map[string]any{"via": opts.Via}
+			if opts.RevertedEvidenceRef != "" {
+				p["reverted_evidence_ref"] = opts.RevertedEvidenceRef
+			}
+			return p
+		}, opts.CommitSHA)
+}
+
+// ViolationOptions describes a detected violation (D6). Detection itself is
+// ADR-0004's; this records its verdict.
+type ViolationOptions struct {
+	CommitSHA    string
+	RevertedSHA  string
+	Files        []string
+	MatchedGlobs []string
+}
+
+// MarkViolated moves an active decision to `violated`. A violated decision is
+// still binding — a violation is a fact about the codebase, not a repeal (D2).
+// Marking an already-violated decision is a no-op that emits no second event.
+func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) error {
+	return s.transition(id, types.StatusViolated, types.EventDecisionViolated, types.ActorSystem,
+		func(d *types.Decision) map[string]any {
+			return map[string]any{
+				"reverted_sha":  opts.RevertedSHA,
+				"files":         nonNilStrings(opts.Files),
+				"matched_globs": nonNilStrings(opts.MatchedGlobs),
+			}
+		}, opts.CommitSHA)
+}
+
+// Reinstate moves a violated decision back to `active` after the violating
+// commit was itself reverted (via = "counter_revert").
+func (s *DecisionStore) Reinstate(id, commitSHA string) error {
+	return s.transition(id, types.StatusActive, types.EventDecisionReinstated, types.ActorSystem,
+		func(d *types.Decision) map[string]any {
+			return map[string]any{"via": "counter_revert"}
+		}, commitSHA)
+}
+
+// DismissViolation records a human dismissing a violation ("false_positive" or
+// "accepted_exception") and reinstates the decision, both in one transaction.
+func (s *DecisionStore) DismissViolation(id, violationEventID, reason string) error {
+	return s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if err := types.CheckTransition(d.Status, types.StatusActive); err != nil {
+			return err
+		}
+		if _, err := appendEvent(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventDecisionViolationDismissed,
+			Actor:      types.ActorHuman,
+			DecisionID: d.ID,
+			Payload: map[string]any{
+				"violation_event_id": violationEventID,
+				"reason":             reason,
+			},
+		}); err != nil {
+			return err
+		}
+		if d.Status == types.StatusActive {
+			return nil // nothing to reinstate
+		}
+		return applyTransitionTx(tx, d, types.StatusActive, types.EventDecisionReinstated,
+			types.ActorHuman, map[string]any{"via": "dismissal"}, "")
+	})
+}
+
+// MarkExpired emits decision.expired the first time any component observes an
+// expired decision. Expiry is a derived predicate and changes no state (D2);
+// the event is idempotent by partial unique index. Reports whether the event
+// was new.
+func (s *DecisionStore) MarkExpired(id string) (bool, error) {
+	var inserted bool
+	err := s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if d.ExpiresAt == nil {
+			return nil
+		}
+		_, ins, err := appendEventOnce(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventDecisionExpired,
+			Actor:      types.ActorSystem,
+			DecisionID: d.ID,
+			Payload:    map[string]any{"expires_at": d.ExpiresAt.UTC().Format(time.RFC3339)},
+		})
+		inserted = ins
+		return err
+	})
+	return inserted, err
+}
+
+// MetadataUpdate patches advisory metadata only. Normative content (title,
+// body, scope, kind) is immutable after acceptance — changing what a decision
+// says or where it applies is a supersession, not an update (D3). Use
+// EditProposed while the decision is still proposed.
+type MetadataUpdate struct {
+	Tags       *[]string
+	Confidence *float64
+	ExpiresAt  **time.Time // outer nil = leave alone; inner nil = clear
+}
+
+// UpdateMetadata applies an advisory patch and emits decision.updated with the
+// field list.
+func (s *DecisionStore) UpdateMetadata(id string, up MetadataUpdate, actor types.Actor) error {
+	if actor == "" {
+		actor = types.ActorHuman
+	}
+	return s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		var sets []string
+		var args []any
+		var fields []string
+		if up.Tags != nil {
+			sets = append(sets, "tags = ?")
+			args = append(args, mustJSON(*up.Tags))
+			fields = append(fields, "tags")
+		}
+		if up.Confidence != nil {
+			if *up.Confidence < 0 || *up.Confidence > 1 {
+				return &types.ValidationError{Field: "confidence", Message: "must be between 0.0 and 1.0"}
+			}
+			sets = append(sets, "confidence = ?")
+			args = append(args, *up.Confidence)
+			fields = append(fields, "confidence")
+		}
+		if up.ExpiresAt != nil {
+			sets = append(sets, "expires_at = ?")
+			args = append(args, nullableTime(*up.ExpiresAt))
+			fields = append(fields, "expires_at")
+		}
+		if len(sets) == 0 {
+			return nil
+		}
+		now := time.Now().UTC()
+		sets = append(sets, "updated_at = ?")
+		args = append(args, fmtTime(now), d.ID)
+
+		if _, err := tx.Exec(`UPDATE decisions SET `+joinComma(sets)+` WHERE id = ?`, args...); err != nil {
+			return fmt.Errorf("updating decision metadata: %w", err)
+		}
+		_, err = appendEvent(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventDecisionUpdated,
+			Actor:      actor,
+			DecisionID: d.ID,
+			Payload:    map[string]any{"fields": fields},
+		})
+		return err
+	})
+}
+
+// EditProposed rewrites normative content while the decision is still
+// proposed, where everything is editable in place (D3).
+func (s *DecisionStore) EditProposed(id string, in DecisionInput, actor types.Actor) error {
+	if actor == "" {
+		actor = types.ActorHuman
+	}
+	return s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if d.Status != types.StatusProposed {
+			return types.ErrDecisionImmutable
+		}
+		if l := len([]rune(in.Title)); l < 1 || l > 200 {
+			return &types.ValidationError{Field: "title", Message: "must be 1–200 characters"}
+		}
+		if err := scope.Validate(in.Scope); err != nil {
+			return err
+		}
+		kind := in.Kind
+		if kind == "" {
+			kind = d.Kind
+		}
+		now := time.Now().UTC()
+		if _, err := tx.Exec(`
+			UPDATE decisions SET title = ?, body = ?, scope = ?, kind = ?, updated_at = ?
+			 WHERE id = ?`,
+			in.Title, in.Body, mustJSON(nonNilStrings(in.Scope)), string(kind), fmtTime(now), d.ID,
+		); err != nil {
+			return fmt.Errorf("editing proposal: %w", err)
+		}
+		_, err = appendEvent(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventDecisionUpdated,
+			Actor:      actor,
+			DecisionID: d.ID,
+			Payload:    map[string]any{"fields": []string{"title", "body", "scope", "kind"}},
+		})
+		return err
+	})
+}
+
+// AddEvidence attaches an evidence row and emits evidence.added. The row is
+// not accepting: only rows present at the acceptance transition are (D4).
+func (s *DecisionStore) AddEvidence(decisionID string, in EvidenceInput) (*types.Evidence, error) {
+	if err := in.validate(); err != nil {
+		return nil, err
+	}
+	var out *types.Evidence
+	err := s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, decisionID)
+		if err != nil {
+			return err
+		}
+		ev, err := insertEvidence(tx, decisionID, in, false, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		out = ev
+		_, err = appendEvent(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventEvidenceAdded,
+			Actor:      in.AddedBy,
+			DecisionID: decisionID,
+			CommitSHA:  commitSHAOf(in),
+			Payload: map[string]any{
+				"evidence_id": ev.ID,
+				"kind":        string(ev.Kind),
+				"ref":         ev.Ref,
+			},
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func commitSHAOf(in EvidenceInput) string {
+	if in.Kind == types.EvidenceKindCommit {
+		return in.Ref
+	}
+	return ""
+}
+
+func insertEvidence(tx *sql.Tx, decisionID string, in EvidenceInput, accepting bool, now time.Time) (*types.Evidence, error) {
+	if err := in.validate(); err != nil {
+		return nil, err
+	}
+	ev := &types.Evidence{
+		ID:         util.GenerateID(),
+		DecisionID: decisionID,
+		Kind:       in.Kind,
+		Ref:        in.Ref,
+		Note:       in.Note,
+		AddedBy:    in.AddedBy,
+		Accepting:  accepting,
+		CreatedAt:  now,
+	}
+	acc := 0
+	if accepting {
+		acc = 1
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO evidence (id, decision_id, kind, ref, note, added_by, accepting, created_at)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		ev.ID, ev.DecisionID, string(ev.Kind), ev.Ref, nullableString(ev.Note),
+		string(ev.AddedBy), acc, fmtTime(ev.CreatedAt)); err != nil {
+		return nil, fmt.Errorf("inserting evidence: %w", err)
+	}
+	return ev, nil
+}
+
+// Evidence returns a decision's evidence rows, oldest first.
+func (s *DecisionStore) Evidence(decisionID string) ([]types.Evidence, error) {
+	rows, err := s.db.Query(`
+		SELECT id, decision_id, kind, ref, note, added_by, accepting, created_at
+		  FROM evidence WHERE decision_id = ? ORDER BY created_at, id`, decisionID)
+	if err != nil {
+		return nil, fmt.Errorf("querying evidence: %w", err)
+	}
+	defer rows.Close()
+
+	var out []types.Evidence
+	for rows.Next() {
+		var e types.Evidence
+		var note sql.NullString
+		var kind, addedBy, created string
+		var accepting int
+		if err := rows.Scan(&e.ID, &e.DecisionID, &kind, &e.Ref, &note, &addedBy,
+			&accepting, &created); err != nil {
+			return nil, err
+		}
+		e.Kind = types.EvidenceKind(kind)
+		e.AddedBy = types.Actor(addedBy)
+		e.Note = note.String
+		e.Accepting = accepting == 1
+		e.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// AcceptingCommitEvidence returns the decisions for which sha is *accepting*
+// commit evidence — the only rows the automatic revert rule may terminate (D6).
+func (s *DecisionStore) AcceptingCommitEvidence(sha string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT decision_id FROM evidence WHERE ref = ? AND kind = 'commit' AND accepting = 1`, sha)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// GetDecision returns a decision by id, or types.ErrDecisionNotFound.
+func (s *DecisionStore) GetDecision(id string) (*types.Decision, error) {
+	row := s.db.QueryRow(`SELECT `+decisionColumns+` FROM decisions WHERE id = ?`, id)
+	d, err := scanDecision(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, types.ErrDecisionNotFound
+	}
+	return d, err
+}
+
+// DecisionFilter narrows a list query. Zero values mean "no filter".
+type DecisionFilter struct {
+	ProjectID string
+	Statuses  []types.DecisionStatus
+	Kind      types.DecisionKind
+	TopicKey  string
+	Limit     int
+}
+
+// ListDecisions returns decisions oldest first.
+func (s *DecisionStore) ListDecisions(f DecisionFilter) ([]types.Decision, error) {
+	q := `SELECT ` + decisionColumns + ` FROM decisions WHERE 1=1`
+	var args []any
+	if f.ProjectID != "" {
+		q += " AND project_id = ?"
+		args = append(args, f.ProjectID)
+	}
+	if len(f.Statuses) > 0 {
+		q += " AND status IN ("
+		for i, st := range f.Statuses {
+			if i > 0 {
+				q += ","
+			}
+			q += "?"
+			args = append(args, string(st))
+		}
+		q += ")"
+	}
+	if f.Kind != "" {
+		q += " AND kind = ?"
+		args = append(args, string(f.Kind))
+	}
+	if f.TopicKey != "" {
+		q += " AND topic_key = ?"
+		args = append(args, f.TopicKey)
+	}
+	q += " ORDER BY created_at, id"
+	if f.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, f.Limit)
+	}
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing decisions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []types.Decision
+	for rows.Next() {
+		d, err := scanDecision(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *d)
+	}
+	return out, rows.Err()
+}
+
+// CountDecisions counts rows matching the filter.
+func (s *DecisionStore) CountDecisions(f DecisionFilter) (int, error) {
+	list, err := s.ListDecisions(f)
+	return len(list), err
+}
+
+// --- transition plumbing ---
+
+// transition applies a state change and its event in one transaction. A
+// same-status call is a no-op that emits nothing.
+func (s *DecisionStore) transition(
+	id string, to types.DecisionStatus, kind types.EventKind, actor types.Actor,
+	payload func(*types.Decision) map[string]any, commitSHA string,
+) error {
+	return s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if d.Status == to {
+			return nil
+		}
+		if err := types.CheckTransition(d.Status, to); err != nil {
+			return err
+		}
+		return applyTransitionTx(tx, d, to, kind, actor, payload(d), commitSHA)
+	})
+}
+
+func applyTransitionTx(
+	tx *sql.Tx, d *types.Decision, to types.DecisionStatus,
+	kind types.EventKind, actor types.Actor, payload map[string]any, commitSHA string,
+) error {
+	now := time.Now().UTC()
+	if _, err := tx.Exec(`
+		UPDATE decisions SET status = ?, status_changed_at = ?, updated_at = ?
+		 WHERE id = ?`, string(to), fmtTime(now), fmtTime(now), d.ID); err != nil {
+		return fmt.Errorf("transition %s -> %s: %w", d.Status, to, err)
+	}
+	d.Status = to
+	d.StatusChangedAt = now
+	d.UpdatedAt = now
+
+	_, err := appendEvent(tx, EventInput{
+		ProjectID:  d.ProjectID,
+		Kind:       kind,
+		Actor:      actor,
+		DecisionID: d.ID,
+		CommitSHA:  commitSHA,
+		Payload:    payload,
+	})
+	return err
+}
+
+func loadDecisionTx(tx *sql.Tx, id string) (*types.Decision, error) {
+	row := tx.QueryRow(`SELECT `+decisionColumns+` FROM decisions WHERE id = ?`, id)
+	d, err := scanDecision(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", types.ErrDecisionNotFound, id)
+	}
+	return d, err
+}
+
+func (s *DecisionStore) withTx(fn func(*sql.Tx) error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func scanDecision(sc scanner) (*types.Decision, error) {
+	var d types.Decision
+	var (
+		kind, status, source                         string
+		sourceRef, agent, model, sessionID           sql.NullString
+		expiresAt, topicKey, supersededBy, embedding sql.NullString
+		decidedAt, accessedAt                        sql.NullString
+		scopeJSON, tagsJSON, supersedesJSON          string
+		createdAt, updatedAt, statusChangedAt        string
+	)
+	if err := sc.Scan(
+		&d.ID, &d.ProjectID, &kind, &d.Title, &d.Body, &status, &scopeJSON, &d.Confidence,
+		&source, &sourceRef, &agent, &model, &sessionID, &expiresAt, &topicKey, &tagsJSON,
+		&supersedesJSON, &supersededBy, &embedding, &createdAt, &updatedAt, &decidedAt,
+		&statusChangedAt, &accessedAt, &d.AccessCount,
+	); err != nil {
+		return nil, err
+	}
+
+	d.Kind = types.DecisionKind(kind)
+	d.Status = types.DecisionStatus(status)
+	d.Source = types.DecisionSource(source)
+	d.SourceRef = sourceRef.String
+	d.Agent = agent.String
+	d.Model = model.String
+	d.SessionID = sessionID.String
+	d.TopicKey = topicKey.String
+	d.SupersededBy = supersededBy.String
+
+	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	d.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	d.StatusChangedAt, _ = time.Parse(time.RFC3339Nano, statusChangedAt)
+	d.ExpiresAt = parseNullTime(expiresAt)
+	d.DecidedAt = parseNullTime(decidedAt)
+	d.AccessedAt = parseNullTime(accessedAt)
+
+	d.Scope = decodeStrings(scopeJSON)
+	d.Tags = decodeStrings(tagsJSON)
+	d.Supersedes = decodeStrings(supersedesJSON)
+	return &d, nil
+}
+
+// --- small helpers ---
+
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func decodeStrings(s string) []string {
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil || out == nil {
+		return []string{}
+	}
+	return out
+}
+
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func fmtTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+func nullableTime(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func parseNullTime(s sql.NullString) *time.Time {
+	if !s.Valid || s.String == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s.String)
+	if err != nil {
+		if t, err = time.Parse(time.RFC3339, s.String); err != nil {
+			return nil
+		}
+	}
+	return &t
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func joinComma(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += ", "
+		}
+		out += p
+	}
+	return out
+}
