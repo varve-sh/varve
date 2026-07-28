@@ -147,7 +147,7 @@ func hasTable(db *sql.DB, name string) (bool, error) {
 //
 // journal_mode is a persistent database property, so setting it once is
 // enough. foreign_keys and busy_timeout are per-connection, and database/sql
-// pools connections — they are therefore also set in the DSN by openDB();
+// pools connections — they are therefore also set in the DSN by OpenDB();
 // this call covers callers that hand us a *sql.DB they opened themselves.
 func applyPragmas(db *sql.DB) error {
 	_, err := db.Exec(`
@@ -157,3 +157,7 @@ PRAGMA busy_timeout = 5000;
 PRAGMA synchronous = NORMAL;`)
 	return err
 }
+
+// BaselineV1SQLForTest exposes the recorded v1 baseline so tests in other
+// packages can build a genuine pre-migration database to migrate.
+func BaselineV1SQLForTest() string { return baselineV1SQL }

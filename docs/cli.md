@@ -16,6 +16,7 @@ memtrace serve   [--dir <path>]
 memtrace status  [--json]
 memtrace reindex
 memtrace scan
+memtrace migrate --from-v1
 memtrace doctor
 memtrace config  get
 memtrace config  set <key> <value>
@@ -160,6 +161,18 @@ memtrace scan
 ```
 
 Review with `memtrace list --status stale`.
+
+---
+
+## `memtrace migrate`
+
+Converts a v1 database (one `memories` table) to the v2 decision-lifecycle schema.
+
+```bash
+memtrace migrate --from-v1
+```
+
+The v1 file is moved aside to `.memtrace/memtrace.v1.bak.db` and kept indefinitely — nothing deletes it — along with the JSON export at `.memtrace/migration-v1-export.json`. Decisions and conventions become governed `decisions`; facts and events become `notes`. v2 databases upgrade themselves when opened; only the v1 conversion is manual.
 
 ---
 

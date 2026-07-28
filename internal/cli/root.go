@@ -31,6 +31,7 @@ func NewRootCmd(version ...string) *cobra.Command {
 		newStatusCmd(),
 		newReindexCmd(),
 		newScanCmd(),
+		newMigrateCmd(),
 		newDoctorCmd(),
 		newConfigCmd(),
 		newStatsCmd(),

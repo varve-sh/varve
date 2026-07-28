@@ -31,7 +31,7 @@ func openKernel() (*kernel.MemoryKernel, string, error) {
 	dbPath := util.GetProjectDbPath(projectRoot)
 	k := kernel.New(dbPath, entry.ID)
 	if err := k.Open(); err != nil {
-		return nil, "", fmt.Errorf("opening database: %w", err)
+		return nil, "", legacyDatabaseHint(err)
 	}
 	return k, projectRoot, nil
 }
