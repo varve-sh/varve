@@ -338,7 +338,7 @@ func (s *DecisionStore) ProposeAccepted(in DecisionInput, opts AcceptOptions) (*
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
-	if in.Source != types.DecisionSourceUser {
+	if !in.Source.MayBeBornActive() {
 		return nil, &types.ValidationError{
 			Field:   "source",
 			Message: "only user-sourced decisions may be born active; everything else is quarantined as proposed",
@@ -612,11 +612,17 @@ type ViolationOptions struct {
 func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) error {
 	return s.transition(id, types.StatusViolated, types.EventDecisionViolated, types.ActorSystem,
 		func(d *types.Decision) map[string]any {
-			return map[string]any{
-				"reverted_sha":  opts.RevertedSHA,
+			p := map[string]any{
 				"files":         nonNilStrings(opts.Files),
 				"matched_globs": nonNilStrings(opts.MatchedGlobs),
 			}
+			// §D7 shows reverted_sha as a SHA. An empty string is a claim about
+			// a commit that does not exist, so the key is omitted when the
+			// verdict came from a scope match rather than a revert.
+			if opts.RevertedSHA != "" {
+				p["reverted_sha"] = opts.RevertedSHA
+			}
+			return p
 		}, opts.CommitSHA)
 }
 
@@ -787,20 +793,49 @@ func (s *DecisionStore) EditProposed(id string, in DecisionInput, actor types.Ac
 		if kind == "" {
 			kind = d.Kind
 		}
+		newScope := mustJSON(nonNilStrings(in.Scope))
+
+		// Only the fields that actually changed are reported. A consumer that
+		// reads the field list gets the truth; one that reads a fixed
+		// four-field list learns nothing.
+		var fields []string
+		if in.Title != d.Title {
+			fields = append(fields, "title")
+		}
+		if in.Body != d.Body {
+			fields = append(fields, "body")
+		}
+		if newScope != mustJSON(nonNilStrings(d.Scope)) {
+			fields = append(fields, "scope")
+		}
+		if kind != d.Kind {
+			fields = append(fields, "kind")
+		}
+		if len(fields) == 0 {
+			return nil
+		}
+
 		now := time.Now().UTC()
 		if _, err := tx.Exec(`
 			UPDATE decisions SET title = ?, body = ?, scope = ?, kind = ?, updated_at = ?
 			 WHERE id = ?`,
-			in.Title, in.Body, mustJSON(nonNilStrings(in.Scope)), string(kind), fmtTime(now), d.ID,
+			in.Title, in.Body, newScope, string(kind), fmtTime(now), d.ID,
 		); err != nil {
 			return fmt.Errorf("editing proposal: %w", err)
 		}
+		// §D7 annotates decision.updated as "advisory metadata only (D3)", but
+		// §D3 also permits normative edits while proposed and the catalogue has
+		// no other event for them. Emitting nothing would leave a normative
+		// change with no audit trace, which is worse, so this kind carries both
+		// and the `fields` list is the discriminator. ADR-0004 must not read
+		// decision.updated as "no normative change happened"; flagged for the
+		// architect as a catalogue gap.
 		_, err = appendEvent(tx, EventInput{
 			ProjectID:  d.ProjectID,
 			Kind:       types.EventDecisionUpdated,
 			Actor:      actor,
 			DecisionID: d.ID,
-			Payload:    map[string]any{"fields": []string{"title", "body", "scope", "kind"}},
+			Payload:    map[string]any{"fields": fields},
 		})
 		return err
 	})
@@ -828,7 +863,9 @@ func (s *DecisionStore) AddEvidence(decisionID string, in EvidenceInput) (*types
 			Kind:       types.EventEvidenceAdded,
 			Actor:      in.AddedBy,
 			DecisionID: decisionID,
-			CommitSHA:  commitSHAOf(in),
+			// commit_sha is deliberately not set: §D7 does not list it for this
+			// kind, and populating it puts non-observation rows into
+			// idx_events_commit, which ADR-0004's commit joins scan.
 			Payload: map[string]any{
 				"evidence_id": ev.ID,
 				"kind":        string(ev.Kind),
@@ -841,13 +878,6 @@ func (s *DecisionStore) AddEvidence(decisionID string, in EvidenceInput) (*types
 		return nil, err
 	}
 	return out, nil
-}
-
-func commitSHAOf(in EvidenceInput) string {
-	if in.Kind == types.EvidenceKindCommit {
-		return in.Ref
-	}
-	return ""
 }
 
 func insertEvidence(tx *sql.Tx, decisionID string, in EvidenceInput, accepting bool, now time.Time) (*types.Evidence, error) {

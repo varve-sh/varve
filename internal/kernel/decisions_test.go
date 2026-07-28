@@ -976,3 +976,112 @@ func TestMarkExpired_ChecksThePredicate(t *testing.T) {
 		t.Errorf("a second expiry must be a silent no-op (got %v, %v); consumers read the predicate", again, err)
 	}
 }
+
+// --- §D7 payload fidelity (review F7, F8) ---
+
+// §D7 shows reverted_sha as a SHA. When the verdict came from a scope match
+// rather than a revert there is no such commit, and the key is omitted rather
+// than set to "" — an empty string is a claim about a commit that never
+// existed, and the event is append-only.
+func TestMarkViolated_OmitsRevertedSHAWhenThereIsNone(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, d.ID, "sha-accept")
+	s.Accept(d.ID, AcceptOptions{})
+
+	if err := s.MarkViolated(d.ID, ViolationOptions{
+		CommitSHA: "sha-bad", Files: []string{"internal/x.go"}, MatchedGlobs: []string{"internal/**"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ev := mustEvent(t, s, d.ID, types.EventDecisionViolated)
+	if _, present := ev.Payload["reverted_sha"]; present {
+		t.Errorf("reverted_sha must be absent when no revert was involved: %v", ev.Payload)
+	}
+	if ev.Payload["files"] == nil || ev.Payload["matched_globs"] == nil {
+		t.Errorf("files and matched_globs must always be present: %v", ev.Payload)
+	}
+}
+
+// evidence.added must not populate the commit_sha column: §D7 does not list it
+// for this kind, and non-observation rows in idx_events_commit would be
+// scanned by ADR-0004's commit joins.
+func TestAddEvidence_DoesNotPolluteTheCommitIndex(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, d.ID, "sha-evidence")
+
+	ev := mustEvent(t, s, d.ID, types.EventEvidenceAdded)
+	if ev.CommitSHA != "" {
+		t.Errorf("evidence.added set commit_sha = %q; §D7 does not list that column "+
+			"for this kind", ev.CommitSHA)
+	}
+	if ev.Payload["ref"] != "sha-evidence" || ev.Payload["kind"] != "commit" {
+		t.Errorf("the ref belongs in the payload: %v", ev.Payload)
+	}
+
+	byCommit, err := s.Events(EventFilter{CommitSHA: "sha-evidence"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byCommit) != 0 {
+		t.Errorf("%d events found by commit_sha; attribution joins should see none", len(byCommit))
+	}
+}
+
+// decision.updated reports the fields that actually changed, not a fixed list.
+func TestEditProposed_ReportsOnlyChangedFields(t *testing.T) {
+	s := newDecisionStore(t)
+	in := baseInput()
+	d, _ := s.Propose(in)
+
+	edit := DecisionInput{Title: in.Title, Body: "a new rationale", Scope: in.Scope}
+	if err := s.EditProposed(d.ID, edit, types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+	ev := mustEvent(t, s, d.ID, types.EventDecisionUpdated)
+	fields, _ := ev.Payload["fields"].([]any)
+	if len(fields) != 1 || fields[0] != "body" {
+		t.Errorf("fields = %v, want [body]", ev.Payload["fields"])
+	}
+
+	// A no-op edit emits nothing at all.
+	same := DecisionInput{Title: in.Title, Body: "a new rationale", Scope: in.Scope}
+	if err := s.EditProposed(d.ID, same, types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+	updates, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDecisionUpdated})
+	if len(updates) != 1 {
+		t.Errorf("%d decision.updated events after a no-op edit, want 1", len(updates))
+	}
+}
+
+// D6's state effect is first-verdict-only, so a repeat violation changes
+// nothing and emits no lifecycle event. Pinned here explicitly because
+// ADR-0001 falsifier 2 counts decision.violated events against dismissals and
+// would otherwise read low without anyone knowing why: the record of record
+// for repeat violations is diff.scope_match(verdict=violate), which the
+// observer writes per (decision, commit).
+func TestMarkViolated_RepeatViolationsLeaveNoSecondLifecycleEvent(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, d.ID, "sha-accept")
+	s.Accept(d.ID, AcceptOptions{})
+
+	for _, sha := range []string{"sha-bad-1", "sha-bad-2", "sha-bad-3"} {
+		if err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: sha}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evs, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDecisionViolated})
+	if len(evs) != 1 {
+		t.Errorf("%d decision.violated events, want 1 (first verdict only, D6)", len(evs))
+	}
+	if evs[0].CommitSHA != "sha-bad-1" {
+		t.Errorf("the retained event should be the first: %q", evs[0].CommitSHA)
+	}
+	got, _ := s.GetDecision(d.ID)
+	if got.Status != types.StatusViolated {
+		t.Errorf("status = %s, want violated", got.Status)
+	}
+}

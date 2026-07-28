@@ -60,13 +60,21 @@ const (
 	DecisionSourceDerived DecisionSource = "derived"
 )
 
-// BirthStatus returns the state a decision from this source must be born in.
-func (s DecisionSource) BirthStatus() DecisionStatus {
-	if s == DecisionSourceUser {
-		return StatusActive
-	}
-	return StatusProposed
-}
+// BornQuarantined reports whether a decision from this source must be born
+// `proposed` and stay there until a human accepts it (ADR-0001 D2).
+//
+// Every source is quarantined, including `user`. D2 lets a human-sourced
+// decision be born active because "the human is the confirmation", but the
+// kernel implements that as a real proposed→active transition inside one
+// transaction (DecisionStore.ProposeAccepted), not as a second birth state —
+// so no active row exists without the decision.accepted event that D4 makes
+// the audit witness for forced acceptances.
+func (s DecisionSource) BornQuarantined() bool { return true }
+
+// MayBeBornActive reports whether ProposeAccepted will accept this source:
+// only `user`. An agent asserting "the user approved" is exactly the assertion
+// the quarantine exists to distrust.
+func (s DecisionSource) MayBeBornActive() bool { return s == DecisionSourceUser }
 
 // Decision is the core governed entity (ADR-0001 D1, D4).
 type Decision struct {

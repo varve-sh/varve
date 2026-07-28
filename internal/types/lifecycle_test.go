@@ -87,19 +87,22 @@ func TestCheckTransition_WrapsErrIllegalTransition(t *testing.T) {
 	}
 }
 
-// Only a human-sourced decision may be born active; everything else is
-// quarantined as proposed (ADR-0001 D2).
-func TestBirthStatus(t *testing.T) {
-	want := map[DecisionSource]DecisionStatus{
-		DecisionSourceUser:    StatusActive,
-		DecisionSourceAgent:   StatusProposed,
-		DecisionSourceGit:     StatusProposed,
-		DecisionSourceImport:  StatusProposed,
-		DecisionSourceDerived: StatusProposed,
+// Every source is born quarantined; only `user` may then be accepted in the
+// same transaction (ADR-0001 D2, and the kernel's ProposeAccepted).
+func TestBirthRules(t *testing.T) {
+	all := []DecisionSource{
+		DecisionSourceUser, DecisionSourceAgent, DecisionSourceGit,
+		DecisionSourceImport, DecisionSourceDerived,
 	}
-	for src, w := range want {
-		if got := src.BirthStatus(); got != w {
-			t.Errorf("%s.BirthStatus() = %s, want %s", src, got, w)
+	for _, src := range all {
+		if !src.BornQuarantined() {
+			t.Errorf("%s must be born proposed", src)
+		}
+	}
+	for _, src := range all {
+		want := src == DecisionSourceUser
+		if got := src.MayBeBornActive(); got != want {
+			t.Errorf("%s.MayBeBornActive() = %v, want %v", src, got, want)
 		}
 	}
 }

@@ -61,20 +61,70 @@ func setStatus(db *sql.DB, id string, to types.DecisionStatus) error {
 	return err
 }
 
+// adrD3Matrix is ADR-0001 §D3's table, transcribed here directly from the ADR
+// and deliberately NOT derived from types.CanTransition.
+//
+// The oracle used to be types.CanTransition, which is the Go twin of the
+// trigger — that test could only prove the two agreed, never that either
+// matched the spec, and a transcription error copied from one file to the
+// other would pass. Each entry below cites its §D3 row.
+var adrD3Matrix = map[types.DecisionStatus]map[types.DecisionStatus]bool{
+	// §D3 row "proposed": active LEGAL (human accepts), superseded LEGAL
+	// (successor names it), rejected LEGAL (human declines); violated and
+	// reverted illegal.
+	types.StatusProposed: {
+		types.StatusActive: true, types.StatusViolated: false,
+		types.StatusSuperseded: true, types.StatusReverted: false,
+		types.StatusRejected: true,
+	},
+	// §D3 row "active": violated, superseded, reverted LEGAL; proposed illegal
+	// (no demotion); rejected illegal (that state is for proposals).
+	types.StatusActive: {
+		types.StatusProposed: false, types.StatusViolated: true,
+		types.StatusSuperseded: true, types.StatusReverted: true,
+		types.StatusRejected: false,
+	},
+	// §D3 row "violated": active, superseded, reverted LEGAL; proposed and
+	// rejected illegal.
+	types.StatusViolated: {
+		types.StatusProposed: false, types.StatusActive: true,
+		types.StatusSuperseded: true, types.StatusReverted: true,
+		types.StatusRejected: false,
+	},
+	// §D3 rows "superseded", "reverted", "rejected": every cell illegal.
+	types.StatusSuperseded: {
+		types.StatusProposed: false, types.StatusActive: false,
+		types.StatusViolated: false, types.StatusReverted: false,
+		types.StatusRejected: false,
+	},
+	types.StatusReverted: {
+		types.StatusProposed: false, types.StatusActive: false,
+		types.StatusViolated: false, types.StatusSuperseded: false,
+		types.StatusRejected: false,
+	},
+	types.StatusRejected: {
+		types.StatusProposed: false, types.StatusActive: false,
+		types.StatusViolated: false, types.StatusSuperseded: false,
+		types.StatusReverted: false,
+	},
+}
+
 // The transition matrix of ADR-0001 §D3, enforced at the DDL level. Illegal
 // transitions must be impossible, not merely discouraged in Go.
 func TestDDL_StatusGuardEnforcesTransitionMatrix(t *testing.T) {
 	db := freshDB(t)
 
+	pairs := 0
 	for _, from := range types.AllDecisionStatuses {
 		for _, to := range types.AllDecisionStatuses {
 			if from == to {
 				continue
 			}
+			pairs++
 			t.Run(fmt.Sprintf("%s_to_%s", from, to), func(t *testing.T) {
 				id := insertDecisionRaw(t, db, from)
 				err := setStatus(db, id, to)
-				legal := types.CanTransition(from, to)
+				legal := adrD3Matrix[from][to]
 				switch {
 				case legal && err != nil:
 					t.Fatalf("%s -> %s should be legal, got: %v", from, to, err)
@@ -84,6 +134,27 @@ func TestDDL_StatusGuardEnforcesTransitionMatrix(t *testing.T) {
 					t.Fatalf("%s -> %s rejected for the wrong reason: %v", from, to, err)
 				}
 			})
+		}
+	}
+	if pairs != 30 {
+		t.Fatalf("exercised %d ordered pairs, want 30 (6x6 minus the diagonal)", pairs)
+	}
+}
+
+// The Go matrix and the DDL trigger must both match §D3 — checked against the
+// independently transcribed table above, so a shared transcription error in
+// lifecycle.go and schema_v2.go cannot hide.
+func TestGoMatrixMatchesTheADRTranscription(t *testing.T) {
+	for _, from := range types.AllDecisionStatuses {
+		for _, to := range types.AllDecisionStatuses {
+			if from == to {
+				continue
+			}
+			want := adrD3Matrix[from][to]
+			if got := types.CanTransition(from, to); got != want {
+				t.Errorf("types.CanTransition(%s, %s) = %v, but §D3 says %v",
+					from, to, got, want)
+			}
 		}
 	}
 }
