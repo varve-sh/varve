@@ -22,6 +22,10 @@ var (
 	ErrLegacyDatabase = errors.New("this is a v1 database — run 'memtrace migrate --from-v1' to convert it")
 	// ErrUnknownEventKind rejects an event kind outside the ADR-0001 §D7 catalogue.
 	ErrUnknownEventKind = errors.New("unknown event kind")
+	// ErrMigrationNotReady blocks the v1→v2 conversion while the v2 read paths
+	// (ADR-0001 §D10) are not wired up. Converting before then would move every
+	// row somewhere nothing reads.
+	ErrMigrationNotReady = errors.New("the v1 to v2 conversion is not ready to run yet")
 )
 
 // ValidationError wraps ErrValidation with field-level detail.

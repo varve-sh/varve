@@ -107,6 +107,12 @@ func (r *MigrationReport) String() string {
 // row count, or if the reimport count does not match the export. ADR-0001
 // falsifier 5: any count mismatch falsifies the framework.
 func MigrateFromV1(opts MigrateV1Options) (*MigrationReport, error) {
+	if !V2ReadPathsReady() {
+		return nil, fmt.Errorf("%w: the v2 read paths (ADR-0001 §D10) are not wired up, so a "+
+			"converted database would read as empty — every row would move to `decisions` and "+
+			"`notes`, which nothing queries yet. Your database is untouched and keeps working "+
+			"on the v1 read paths", types.ErrMigrationNotReady)
+	}
 	if opts.DBPath == "" {
 		return nil, &types.ValidationError{Field: "db_path", Message: "must not be empty"}
 	}

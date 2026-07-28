@@ -67,21 +67,47 @@ func setupV1Project(t *testing.T) (root string, ids []string) {
 	return root, ids
 }
 
-// Every command that opens the database must route a v1 project to the
-// migration instead of failing obscurely or migrating silently.
-func TestCommands_OnAV1DatabaseRouteToMigrate(t *testing.T) {
+// While the conversion is gated, a v1 database must keep working. Refusing to
+// open it *and* refusing to convert it would leave the user with no path at
+// all — worse than the state before this branch.
+func TestCommands_OnAV1DatabaseStillServeTheirRows(t *testing.T) {
 	setupV1Project(t)
 
 	out, err := runCmd(t, "list")
-	if err == nil {
-		t.Fatalf("expected a v1 database to be refused, got: %s", out)
+	if err != nil {
+		t.Fatalf("a v1 database must keep working while the conversion is gated: %v\n%s", err, out)
 	}
-	if !strings.Contains(err.Error(), "migrate --from-v1") {
-		t.Errorf("error should name the command to run, got: %v", err)
+	for _, want := range []string{"Use ULIDs everywhere.", "Wrap errors with %w.", "CI runs on arm64."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("v1 memory %q is not visible after opening; got:\n%s", want, out)
+		}
+	}
+}
+
+// The gate itself: the command refuses, and nothing is moved or created.
+func TestMigrateCmd_IsGatedUntilTheReadPathsLand(t *testing.T) {
+	root, _ := setupV1Project(t)
+
+	out, err := runCmd(t, "migrate", "--from-v1")
+	if err == nil {
+		t.Fatalf("expected the gated conversion to refuse, got: %s", out)
+	}
+	if !strings.Contains(err.Error(), "invisible") {
+		t.Errorf("the refusal must say why, got: %v", err)
+	}
+
+	for _, name := range []string{"memtrace.v1.bak.db", "migration-v1-export.json"} {
+		if _, statErr := os.Stat(filepath.Join(root, ".memtrace", name)); statErr == nil {
+			t.Errorf("a refused conversion must not create %s", name)
+		}
+	}
+	if out, err := runCmd(t, "list"); err != nil || !strings.Contains(out, "Use ULIDs everywhere.") {
+		t.Errorf("the database must be untouched after a refusal: %v\n%s", err, out)
 	}
 }
 
 func TestMigrateCmd_FromV1(t *testing.T) {
+	defer kernel.SetV2ReadPathsReady(true)()
 	root, ids := setupV1Project(t)
 
 	out, err := runCmd(t, "migrate", "--from-v1")
@@ -101,11 +127,6 @@ func TestMigrateCmd_FromV1(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".memtrace", "migration-v1-export.json")); err != nil {
 		t.Errorf("export missing: %v", err)
-	}
-
-	// The project opens normally afterwards.
-	if out, err := runCmd(t, "list"); err != nil {
-		t.Fatalf("list after migration: %v\n%s", err, out)
 	}
 
 	db, err := kernel.OpenDB(util.GetProjectDbPath(root))
@@ -135,5 +156,35 @@ func TestMigrateCmd_RequiresTheFlag(t *testing.T) {
 	setupV1Project(t)
 	if _, err := runCmd(t, "migrate"); err == nil {
 		t.Error("bare `migrate` should explain that --from-v1 is needed")
+	}
+}
+
+// The canary for the hole the gate exists for. Today a converted database is
+// invisible to every product read path, because they all still query
+// `memories` while the rows are in `decisions`/`notes` (ADR-0001 §D10 is not
+// implemented yet). This asserts that gap out loud, so it is visible in the
+// suite instead of hidden behind an exit code.
+//
+// WHEN THE §D10 READ-PATH PORT LANDS this test will fail. That is its job:
+// delete it, flip kernel's v2ReadPathsReady to true, and replace it with the
+// assertion that `list` shows every migrated row.
+func TestMigrateFromV1_ReadPathHoleIsWhyTheGateExists(t *testing.T) {
+	defer kernel.SetV2ReadPathsReady(true)()
+	setupV1Project(t)
+
+	if out, err := runCmd(t, "migrate", "--from-v1"); err != nil {
+		t.Fatalf("migrate: %v\n%s", err, out)
+	}
+
+	out, err := runCmd(t, "list")
+	if err != nil {
+		t.Fatalf("list after migration: %v\n%s", err, out)
+	}
+	for _, gone := range []string{"Use ULIDs everywhere.", "Wrap errors with %w.", "CI runs on arm64."} {
+		if strings.Contains(out, gone) {
+			t.Fatalf("the v2 read paths appear to be wired up (%q is visible after migration).\n"+
+				"Delete this canary, flip kernel's v2ReadPathsReady to true, and assert "+
+				"visibility instead.", gone)
+		}
 	}
 }

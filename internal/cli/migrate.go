@@ -21,10 +21,22 @@ func newMigrateCmd() *cobra.Command {
 			"lifecycle schema. The v1 file is moved aside and kept indefinitely —\n" +
 			"nothing deletes it — and the JSON export is kept beside it.\n\n" +
 			"v2 databases upgrade themselves through the versioned migration\n" +
-			"framework when they are opened; only the v1 conversion is manual.",
+			"framework when they are opened; only the v1 conversion is manual.\n\n" +
+			"NOT YET AVAILABLE: the v2 read paths are still being built, so a\n" +
+			"converted database would read as empty. The command refuses until\n" +
+			"they land. Your v1 database keeps working in the meantime.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !fromV1 {
 				return fmt.Errorf("nothing to do — pass --from-v1 to convert a v1 database")
+			}
+			if !kernel.V2ReadPathsReady() {
+				return fmt.Errorf(
+					"not yet — converting now would make every memory invisible.\n\n" +
+						"The v2 schema is in place, but the read paths that query it are still\n" +
+						"being built. A converted database would move every row into `decisions`\n" +
+						"and `notes`, which no command reads yet: list, search, export, status and\n" +
+						"the MCP tools would all return nothing.\n\n" +
+						"Nothing has been changed. Your database keeps working as it is")
 			}
 
 			cwd, err := os.Getwd()

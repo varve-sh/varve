@@ -172,7 +172,9 @@ Converts a v1 database (one `memories` table) to the v2 decision-lifecycle schem
 memtrace migrate --from-v1
 ```
 
-The v1 file is moved aside to `.memtrace/memtrace.v1.bak.db` and kept indefinitely — nothing deletes it — along with the JSON export at `.memtrace/migration-v1-export.json`. Decisions and conventions become governed `decisions`; facts and events become `notes`. v2 databases upgrade themselves when opened; only the v1 conversion is manual.
+**Not available yet.** The v2 read paths are still being built, so a converted database would read as empty — every row would move into `decisions`/`notes`, which no command queries yet. The command refuses until they land, and your v1 database keeps working unchanged in the meantime.
+
+When it does run: the v1 file is moved aside to `.memtrace/memtrace.v1.bak.db` and kept indefinitely — nothing deletes it — along with the JSON export at `.memtrace/migration-v1-export.json`. Decisions and conventions become governed `decisions`; facts and events become `notes`. v2 databases upgrade themselves when opened; only the v1 conversion is manual.
 
 ---
 

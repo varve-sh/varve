@@ -34,6 +34,45 @@ var migrations = []migration{
 // LatestSchemaVersion is the version a freshly created database ends up at.
 func LatestSchemaVersion() int { return migrations[len(migrations)-1].version }
 
+// v2ReadPathsReady reports whether the product can actually read a v2
+// database. It gates the v1→v2 conversion, and it exists because of a real
+// hole found in review.
+//
+// ADR-0001 §D9 writes the v1 rows into `decisions` and `notes`; §D10 specifies
+// the matching read paths — recall over `decisions_fts` + `notes_fts`,
+// `memory_context` over decision scopes. This branch shipped the write half.
+// Until the read half lands, converting a database moves every row somewhere
+// nothing reads: `list`, `recall`, `export`, `memory_recall`, `memory_context`,
+// `status` and the TUI would all return nothing and exit 0, and subsequent
+// saves would land back in the empty v1 table, splitting the store in two. The
+// data would survive in `decisions`/`notes` and in the kept backup, but from
+// the user's point of view their memory would be gone, silently.
+//
+// So, until the §D10 port lands:
+//
+//	MigrateFromV1 refuses, naming the reason;
+//	ApplySchema leaves a v1 database alone instead of refusing it, so it keeps
+//	  working on the v1 read paths.
+//
+// Flipping this one variable to true restores exactly the behaviour ADR-0001
+// §D9 specifies: Open() refuses a v1 database with instructions, and the
+// conversion runs. That flip is the last step of the read-path port, and it is
+// deliberately a single edit with tests on both sides of it.
+var v2ReadPathsReady = false
+
+// V2ReadPathsReady reports whether the v2 read paths (ADR-0001 §D10) are
+// wired up, and therefore whether the v1→v2 conversion may run.
+func V2ReadPathsReady() bool { return v2ReadPathsReady }
+
+// SetV2ReadPathsReady flips the gate and returns a function restoring the
+// previous value. Tests use it to exercise both sides; the read-path port will
+// change the variable's initial value instead.
+func SetV2ReadPathsReady(ready bool) func() {
+	prev := v2ReadPathsReady
+	v2ReadPathsReady = ready
+	return func() { v2ReadPathsReady = prev }
+}
+
 func execScript(script string) func(*sql.Tx) error {
 	return func(tx *sql.Tx) error {
 		_, err := tx.Exec(script)
@@ -64,7 +103,16 @@ func ApplySchema(db *sql.DB) error {
 		return err
 	}
 	if legacy {
-		return types.ErrLegacyDatabase
+		if V2ReadPathsReady() {
+			return types.ErrLegacyDatabase
+		}
+		// The conversion is gated (see v2ReadPathsReady). Refusing here as well
+		// would leave an existing database with no read path *and* no way
+		// forward, which is strictly worse than the state before this branch.
+		// The database is left exactly as it is — untouched, un-migrated, and
+		// still served by the v1 read paths. D9's actual requirement, "a v1
+		// database is never auto-migrated on open", is upheld either way.
+		return nil
 	}
 
 	if _, err := db.Exec(migrationsTableSQL); err != nil {

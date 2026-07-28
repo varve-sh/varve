@@ -3,6 +3,7 @@ package kernel
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,6 +135,7 @@ func TestApplyOne_FailureIsNotRecorded(t *testing.T) {
 
 // ADR-0001 D9: a v1 database is never auto-migrated on open.
 func TestApplySchema_RefusesLegacyV1Database(t *testing.T) {
+	defer SetV2ReadPathsReady(true)()
 	path := filepath.Join(t.TempDir(), "v1.db")
 	db, err := OpenDB(path)
 	if err != nil {
@@ -182,5 +184,68 @@ func TestOpenDB_PragmasHoldAcrossPooledConnections(t *testing.T) {
 	}
 	if !strings.EqualFold(mode, "wal") {
 		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+}
+
+// While the conversion is gated, a v1 database must be left alone and stay
+// usable — not refused, which would leave it with no read path and no way
+// forward. D9's actual requirement (never auto-migrated on open) still holds.
+func TestApplySchema_GatedLeavesAV1DatabaseUntouchedAndUsable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(baselineV1SQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO memories (id, type, content, project_id, created_at, updated_at)
+		VALUES ('m1', 'fact', 'a v1 memory', 'p1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if V2ReadPathsReady() {
+		t.Fatal("the gate should ship closed until the §D10 read paths land")
+	}
+	if err := ApplySchema(db); err != nil {
+		t.Fatalf("a gated v1 database must open, got: %v", err)
+	}
+
+	// Nothing was migrated: no v2 tables, no schema_migrations, row intact.
+	for _, table := range []string{"schema_migrations", "decisions", "notes", "events"} {
+		if ok, _ := hasTable(db, table); ok {
+			t.Errorf("table %q was created on a v1 database — that is an auto-migration", table)
+		}
+	}
+	var content string
+	if err := db.QueryRow(`SELECT content FROM memories WHERE id = 'm1'`).Scan(&content); err != nil {
+		t.Fatalf("the v1 row must still be readable: %v", err)
+	}
+	if content != "a v1 memory" {
+		t.Errorf("content = %q", content)
+	}
+
+	// With the gate open, D9's specified behaviour returns unchanged.
+	defer SetV2ReadPathsReady(true)()
+	if err := ApplySchema(db); !errors.Is(err, types.ErrLegacyDatabase) {
+		t.Fatalf("with the read paths ready, a v1 database must be refused: %v", err)
+	}
+}
+
+func TestMigrateFromV1_IsGatedOnTheReadPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1.db")
+	db, _ := OpenDB(path)
+	if _, err := db.Exec(baselineV1SQL); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	_, err := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: "p1"})
+	if !errors.Is(err, types.ErrMigrationNotReady) {
+		t.Fatalf("err = %v, want ErrMigrationNotReady", err)
+	}
+	if _, statErr := os.Stat(path + ".v1.bak.db"); statErr == nil {
+		t.Error("a gated conversion must not touch anything")
 	}
 }
