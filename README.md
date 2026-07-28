@@ -68,7 +68,7 @@ All data lives in `.memtrace/memtrace.db` — SQLite, local only, no account req
 
 | Tool | What it does |
 |------|-------------|
-| `memory_save` | Save a decision, convention, fact, or event |
+| `memory_save` | Save a decision, convention or note |
 | `memory_recall` | Search memories by natural language query |
 | `memory_get` | Fetch the full content of a memory by ID |
 | `memory_forget` | Delete a memory by ID or query |

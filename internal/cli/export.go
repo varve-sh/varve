@@ -66,7 +66,7 @@ func newExportCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file (default: stdout)")
-	cmd.Flags().StringVar(&memType, "type", "", "Filter by type")
+	cmd.Flags().StringVar(&memType, "type", "", "Filter by type: decision, convention, note")
 	cmd.Flags().StringVar(&status, "status", "active", "Filter by status: active, stale, archived")
 	cmd.Flags().StringVar(&format, "format", "json", "Output format: json, markdown")
 	return cmd

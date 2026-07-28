@@ -92,7 +92,7 @@ Use --dry-run to preview what would be imported without saving.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&memType, "type", "", "Only import memories of this type: decision, convention, fact, event")
+	cmd.Flags().StringVar(&memType, "type", "", "Only import memories of this type: decision, convention, note")
 	cmd.Flags().StringVar(&format, "format", "", "Force format: json, markdown (default: auto-detect by extension)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview what would be imported without saving")
 	return cmd

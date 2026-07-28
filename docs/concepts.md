@@ -123,3 +123,41 @@ memtrace list --type event
 All data lives in `.memtrace/memtrace.db` — SQLite with WAL mode, local-only, no account required. The `.memtrace/` directory is added to `.gitignore` automatically on init.
 
 Memory IDs are [ULIDs](https://github.com/ulid/spec) — lexicographically sortable, collision-resistant, and time-ordered.
+
+---
+
+## Decisions and notes
+
+Memories are stored in two classes, and they behave differently.
+
+**Decisions** (`--type decision`, `--type convention`) are governed. They carry
+a lifecycle — `proposed` → `active` → `violated` → `superseded` / `reverted` /
+`rejected` — a scope of file globs, evidence, and provenance. Every change to
+one is recorded in an append-only event log.
+
+- A decision you save yourself is confirmed on the spot: you are the
+  confirmation.
+- A decision an agent saves over MCP arrives as **`proposed`** and does not
+  bind anything until a human accepts it. This is deliberate: the model does
+  not get to decide what is law.
+- Content and scope are immutable once accepted. Changing what a decision says
+  means superseding it with a new one, so the history keeps its meaning.
+- Forgetting a decision that has history is not a delete — it becomes
+  `rejected` (if it was still a proposal) or `reverted`. The record survives.
+
+**Notes** (`--type note`) are everything else: facts, session summaries,
+prompts. They are retrievable but ungoverned — no lifecycle, no evidence, no
+attribution. `fact` and `event` are still accepted and both mean `note`; what
+they used to distinguish now lives in tags (`session`, `prompt`).
+
+### Scopes are file globs
+
+A decision's file paths are **globs**, matched with `doublestar`:
+
+```bash
+memtrace save "Store code returns wrapped errors" --type convention --files 'internal/kernel/**'
+```
+
+`memory_context` and the file matcher expand them, so `internal/kernel/**`
+matches `internal/kernel/store.go`. An exact path is simply a glob that matches
+itself. Note file paths keep exact-match semantics — they were never patterns.

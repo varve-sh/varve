@@ -117,10 +117,8 @@ func typeBadge(m types.Memory) string {
 		return styleBadgeDecision.Render(label)
 	case types.MemoryTypeConvention:
 		return styleBadgeConvention.Render(label)
-	case types.MemoryTypeFact:
+	case types.MemoryTypeNote:
 		return styleBadgeFact.Render(label)
-	case types.MemoryTypeEvent:
-		return styleBadgeEvent.Render(label)
 	default:
 		return styleBadgeFact.Render(label)
 	}
@@ -393,4 +391,3 @@ func removeByID(ms []types.Memory, id string) []types.Memory {
 	}
 	return out
 }
-

@@ -37,8 +37,8 @@ func TestKernel_Save_Defaults(t *testing.T) {
 	if mem.ID == "" {
 		t.Error("expected non-empty ID")
 	}
-	if mem.Type != types.MemoryTypeFact {
-		t.Errorf("type: want fact, got %s", mem.Type)
+	if mem.Type != types.MemoryTypeNote {
+		t.Errorf("type: want note, got %s", mem.Type)
 	}
 	if mem.Source != types.MemorySourceUser {
 		t.Errorf("source: want user, got %s", mem.Source)

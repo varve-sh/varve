@@ -194,3 +194,29 @@ func scanEvent(s scanner) (*types.Event, error) {
 	}
 	return &e, nil
 }
+
+// RecordRecall emits recall.served for the legacy read path (ADR-0001 D7).
+//
+// It is kept next to the other emitters rather than inlined in the kernel so
+// the payload shape stays with the catalogue it belongs to. Phase 0 ruling 3
+// keeps memory_recall's semantics unchanged while the packer ships beside it;
+// this event is what makes the two comparable (ADR-0002 P11).
+func (s *DecisionStore) RecordRecall(projectID string, in types.MemoryRecallInput, ids []string) error {
+	if ids == nil {
+		ids = []string{}
+	}
+	return s.withTx(func(tx *sql.Tx) error {
+		_, err := appendEvent(tx, EventInput{
+			ProjectID: projectID,
+			Kind:      types.EventRecallServed,
+			Actor:     types.ActorSystem,
+			SessionID: in.SessionID,
+			Payload: map[string]any{
+				"query": in.Query,
+				"ids":   ids,
+				"limit": in.Limit,
+			},
+		})
+		return err
+	})
+}

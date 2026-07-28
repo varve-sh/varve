@@ -135,7 +135,6 @@ func TestApplyOne_FailureIsNotRecorded(t *testing.T) {
 
 // ADR-0001 D9: a v1 database is never auto-migrated on open.
 func TestApplySchema_RefusesLegacyV1Database(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path := filepath.Join(t.TempDir(), "v1.db")
 	db, err := OpenDB(path)
 	if err != nil {
@@ -187,10 +186,10 @@ func TestOpenDB_PragmasHoldAcrossPooledConnections(t *testing.T) {
 	}
 }
 
-// While the conversion is gated, a v1 database must be left alone and stay
-// usable — not refused, which would leave it with no read path and no way
-// forward. D9's actual requirement (never auto-migrated on open) still holds.
-func TestApplySchema_GatedLeavesAV1DatabaseUntouchedAndUsable(t *testing.T) {
+// The gate seam, exercised closed. It shipped closed while the §D10 read paths
+// were missing; it is open now. Keeping both sides tested means the mechanism
+// stays trustworthy if a future change needs it again.
+func TestApplySchema_GatedLeavesAV1DatabaseUntouched(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "v1.db")
 	db, err := OpenDB(path)
 	if err != nil {
@@ -205,9 +204,7 @@ func TestApplySchema_GatedLeavesAV1DatabaseUntouchedAndUsable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if V2ReadPathsReady() {
-		t.Fatal("the gate should ship closed until the §D10 read paths land")
-	}
+	defer SetV2ReadPathsReady(false)()
 	if err := ApplySchema(db); err != nil {
 		t.Fatalf("a gated v1 database must open, got: %v", err)
 	}
@@ -226,14 +223,15 @@ func TestApplySchema_GatedLeavesAV1DatabaseUntouchedAndUsable(t *testing.T) {
 		t.Errorf("content = %q", content)
 	}
 
-	// With the gate open, D9's specified behaviour returns unchanged.
-	defer SetV2ReadPathsReady(true)()
+	// With the gate open — the shipping state — D9's specified behaviour holds.
+	SetV2ReadPathsReady(true)
 	if err := ApplySchema(db); !errors.Is(err, types.ErrLegacyDatabase) {
 		t.Fatalf("with the read paths ready, a v1 database must be refused: %v", err)
 	}
 }
 
 func TestMigrateFromV1_IsGatedOnTheReadPaths(t *testing.T) {
+	defer SetV2ReadPathsReady(false)()
 	path := filepath.Join(t.TempDir(), "v1.db")
 	db, _ := OpenDB(path)
 	if _, err := db.Exec(baselineV1SQL); err != nil {

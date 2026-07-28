@@ -11,7 +11,7 @@ Save something worth remembering across sessions.
 ```
 memory_save(
   content:    "We use JWT RS256 — stateless API, no session storage",
-  type:       "decision",             // decision | convention | fact | event
+  type:       "decision",             // decision | convention | note
   tags:       ["auth", "security"],
   file_paths: ["src/middleware/auth.go"],
   topic_key:  "decision/auth"         // optional — re-saving with the same key updates instead of creating a duplicate
@@ -23,7 +23,7 @@ memory_save(
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `content` | yes | The memory text. Wrap sensitive parts in `<private>...</private>` — they are stripped before storage. |
-| `type` | no | `decision`, `convention`, `fact`, or `event`. Default: `fact`. |
+| `type` | no | `decision`, `convention` or `note`. `fact` and `event` are accepted as synonyms for `note`. Default: `note`. |
 | `tags` | no | Array of strings for categorization. |
 | `file_paths` | no | Paths relative to project root. Used by `memory_context` to surface this memory when editing related files. |
 | `topic_key` | no | Stable identifier (e.g. `"convention/error-handling"`). Re-saving with the same key updates the memory instead of creating a duplicate. |

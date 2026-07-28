@@ -3,7 +3,7 @@
 ```
 memtrace init    [--name <name>] [--no-import]
 memtrace setup   [claude-code|cursor|vscode|opencode|windsurf|gemini] [--global]
-memtrace save    <content> [--type decision|convention|fact|event] [--tags auth,api] [--files src/auth.go] [--confidence 0.9]
+memtrace save    <content> [--type decision|convention|note] [--tags auth,api] [--files src/auth.go] [--confidence 0.9]
 memtrace update  <id|prefix> [--content "..."] [--type ...] [--tags ...] [--files ...] [--confidence 0.9]
 memtrace edit    <id|prefix>
 memtrace search  <query> [--limit 10] [--type decision] [--json]

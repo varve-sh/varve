@@ -133,7 +133,6 @@ func populatedV1DB(t *testing.T) (string, []v1Row) {
 // ADR-0001 falsifier 5: any count mismatch between v1 export and v2 reimport
 // falsifies the framework.
 func TestMigrateFromV1_RoundTripFidelity(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path, rows := populatedV1DB(t)
 
 	report, err := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: testProject})
@@ -219,7 +218,6 @@ func TestMigrateFromV1_RoundTripFidelity(t *testing.T) {
 }
 
 func TestMigrateFromV1_RowMapping(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path, rows := populatedV1DB(t)
 	if _, err := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: testProject}); err != nil {
 		t.Fatal(err)
@@ -370,7 +368,6 @@ func TestMigrateFromV1_RowMapping(t *testing.T) {
 // or restore the backup), so the recovery path is the backup file — and it has
 // to be a complete, openable v1 database.
 func TestMigrateFromV1_BackupIsACompleteRestorePoint(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path, rows := populatedV1DB(t)
 	report, err := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: testProject})
 	if err != nil {
@@ -422,7 +419,6 @@ func TestMigrateFromV1_BackupIsACompleteRestorePoint(t *testing.T) {
 }
 
 func TestMigrateFromV1_RefusesANonV1Database(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path := filepath.Join(t.TempDir(), "v2.db")
 	db, _ := OpenDB(path)
 	if err := ApplySchema(db); err != nil {
@@ -445,7 +441,6 @@ func TestMigrateFromV1_RefusesANonV1Database(t *testing.T) {
 // A v1 row with neither summary nor content cannot become a decision (a title
 // is required). It is skipped, named in the report, and counted.
 func TestMigrateFromV1_SkippedRowsAreCountedAndNamed(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "memtrace.db")
 	db, _ := OpenDB(path)
@@ -479,7 +474,6 @@ func TestMigrateFromV1_SkippedRowsAreCountedAndNamed(t *testing.T) {
 }
 
 func TestMigrateFromV1_MigratedDatabaseIsFullyUsable(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path, rows := populatedV1DB(t)
 	if _, err := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: testProject}); err != nil {
 		t.Fatal(err)
@@ -517,7 +511,6 @@ func TestMigrateFromV1_MigratedDatabaseIsFullyUsable(t *testing.T) {
 // pass uses. This is the invariant F3 broke, asserted directly over the whole
 // fixture rather than row by row.
 func TestMigrateFromV1_NoArchivedRowSurvivesAsAProposal(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path, rows := populatedV1DB(t)
 	if _, err := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: testProject}); err != nil {
 		t.Fatal(err)
@@ -550,7 +543,6 @@ func TestMigrateFromV1_NoArchivedRowSurvivesAsAProposal(t *testing.T) {
 // tables inside the transaction, so a reimport that drops rows aborts before
 // commit and leaves the backup as the recovery path.
 func TestMigrateFromV1_CountCheckFiresOnALossyReimport(t *testing.T) {
-	defer SetV2ReadPathsReady(true)()
 	path, rows := populatedV1DB(t)
 
 	exported, embeddings, _, err := exportV1(path)

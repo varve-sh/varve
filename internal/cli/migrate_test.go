@@ -67,25 +67,26 @@ func setupV1Project(t *testing.T) (root string, ids []string) {
 	return root, ids
 }
 
-// While the conversion is gated, a v1 database must keep working. Refusing to
-// open it *and* refusing to convert it would leave the user with no path at
-// all — worse than the state before this branch.
-func TestCommands_OnAV1DatabaseStillServeTheirRows(t *testing.T) {
+// With the read paths ported, ADR-0001 §D9's specified behaviour is in force
+// again: a v1 database is refused on open, with instructions. It has to be —
+// the read paths query v2 tables a v1 file does not have.
+func TestCommands_OnAV1DatabaseRouteToMigrate(t *testing.T) {
 	setupV1Project(t)
 
 	out, err := runCmd(t, "list")
-	if err != nil {
-		t.Fatalf("a v1 database must keep working while the conversion is gated: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("expected a v1 database to be refused, got: %s", out)
 	}
-	for _, want := range []string{"Use ULIDs everywhere.", "Wrap errors with %w.", "CI runs on arm64."} {
-		if !strings.Contains(out, want) {
-			t.Errorf("v1 memory %q is not visible after opening; got:\n%s", want, out)
-		}
+	if !strings.Contains(err.Error(), "migrate --from-v1") {
+		t.Errorf("the error must name the command to run, got: %v", err)
 	}
 }
 
-// The gate itself: the command refuses, and nothing is moved or created.
-func TestMigrateCmd_IsGatedUntilTheReadPathsLand(t *testing.T) {
+// The gate seam survives the port: closing it must still refuse the conversion
+// and leave the database untouched, so the deviation stays reviewable and the
+// mechanism is available if a future schema change needs the same shape.
+func TestMigrateCmd_GateStillRefusesWhenClosed(t *testing.T) {
+	defer kernel.SetV2ReadPathsReady(false)()
 	root, _ := setupV1Project(t)
 
 	out, err := runCmd(t, "migrate", "--from-v1")
@@ -95,19 +96,14 @@ func TestMigrateCmd_IsGatedUntilTheReadPathsLand(t *testing.T) {
 	if !strings.Contains(err.Error(), "invisible") {
 		t.Errorf("the refusal must say why, got: %v", err)
 	}
-
 	for _, name := range []string{"memtrace.v1.bak.db", "migration-v1-export.json"} {
 		if _, statErr := os.Stat(filepath.Join(root, ".memtrace", name)); statErr == nil {
 			t.Errorf("a refused conversion must not create %s", name)
 		}
 	}
-	if out, err := runCmd(t, "list"); err != nil || !strings.Contains(out, "Use ULIDs everywhere.") {
-		t.Errorf("the database must be untouched after a refusal: %v\n%s", err, out)
-	}
 }
 
 func TestMigrateCmd_FromV1(t *testing.T) {
-	defer kernel.SetV2ReadPathsReady(true)()
 	root, ids := setupV1Project(t)
 
 	out, err := runCmd(t, "migrate", "--from-v1")
@@ -159,32 +155,64 @@ func TestMigrateCmd_RequiresTheFlag(t *testing.T) {
 	}
 }
 
-// The canary for the hole the gate exists for. Today a converted database is
-// invisible to every product read path, because they all still query
-// `memories` while the rows are in `decisions`/`notes` (ADR-0001 §D10 is not
-// implemented yet). This asserts that gap out loud, so it is visible in the
-// suite instead of hidden behind an exit code.
+// The port's acceptance test, and the replacement for the canary that used to
+// live here. The canary asserted that migrated rows were invisible to every
+// product read path; it fired the moment §D10 landed, as designed, and this
+// took its place.
 //
-// WHEN THE §D10 READ-PATH PORT LANDS this test will fail. That is its job:
-// delete it, flip kernel's v2ReadPathsReady to true, and replace it with the
-// assertion that `list` shows every migrated row.
-func TestMigrateFromV1_ReadPathHoleIsWhyTheGateExists(t *testing.T) {
-	defer kernel.SetV2ReadPathsReady(true)()
+// F1 shipped green because a test asserted an exit code rather than an
+// outcome. This asserts the outcome: every migrated row is visible through the
+// commands a user actually runs.
+func TestMigrateCmd_MigratedRowsAreVisibleToEveryReadPath(t *testing.T) {
 	setupV1Project(t)
 
 	if out, err := runCmd(t, "migrate", "--from-v1"); err != nil {
 		t.Fatalf("migrate: %v\n%s", err, out)
 	}
 
+	want := []string{"Use ULIDs everywhere.", "Wrap errors with %w.", "CI runs on arm64."}
+
 	out, err := runCmd(t, "list")
 	if err != nil {
-		t.Fatalf("list after migration: %v\n%s", err, out)
+		t.Fatalf("list: %v\n%s", err, out)
 	}
-	for _, gone := range []string{"Use ULIDs everywhere.", "Wrap errors with %w.", "CI runs on arm64."} {
-		if strings.Contains(out, gone) {
-			t.Fatalf("the v2 read paths appear to be wired up (%q is visible after migration).\n"+
-				"Delete this canary, flip kernel's v2ReadPathsReady to true, and assert "+
-				"visibility instead.", gone)
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("`list` does not show %q after migration; got:\n%s", w, out)
 		}
+	}
+
+	// Search reaches both classes: ULIDs is a decision, arm64 a note.
+	for _, probe := range []struct{ query, expect string }{
+		{"ULIDs", "Use ULIDs everywhere."},
+		{"arm64", "CI runs on arm64."},
+		{"errors", "Wrap errors with %w."},
+	} {
+		out, err := runCmd(t, "search", probe.query)
+		if err != nil {
+			t.Fatalf("search %q: %v\n%s", probe.query, err, out)
+		}
+		if !strings.Contains(out, probe.expect) {
+			t.Errorf("`search %s` did not surface %q; got:\n%s", probe.query, probe.expect, out)
+		}
+	}
+
+	// Export sees them too, and status counts them.
+	out, err = runCmd(t, "export")
+	if err != nil {
+		t.Fatalf("export: %v\n%s", err, out)
+	}
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("`export` omitted %q", w)
+		}
+	}
+
+	out, err = runCmd(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "0 memories") {
+		t.Errorf("`status` reports an empty store after migration:\n%s", out)
 	}
 }

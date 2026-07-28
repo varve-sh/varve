@@ -55,7 +55,7 @@ func newSaveCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&memType, "type", "fact", "Memory type: decision, convention, fact, event")
+	cmd.Flags().StringVar(&memType, "type", "fact", "Memory type: decision, convention, note")
 	cmd.Flags().StringVar(&tags, "tags", "", "Comma-separated tags")
 	cmd.Flags().StringVar(&files, "files", "", "Comma-separated relative file paths")
 	cmd.Flags().Float64Var(&confidence, "confidence", 1.0, "Confidence score 0.0-1.0")

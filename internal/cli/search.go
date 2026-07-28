@@ -55,7 +55,7 @@ func newSearchCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&limit, "limit", 10, "Max results")
-	cmd.Flags().StringVar(&memType, "type", "", "Filter by type: decision, convention, fact, event")
+	cmd.Flags().StringVar(&memType, "type", "", "Filter by type: decision, convention, note")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -92,8 +92,8 @@ func typeColorFor(t types.MemoryType) *color.Color {
 		return color.New(color.FgYellow)
 	case types.MemoryTypeConvention:
 		return color.New(color.FgCyan)
-	case types.MemoryTypeEvent:
-		return color.New(color.FgMagenta)
+	case types.MemoryTypeNote:
+		return color.New(color.FgWhite)
 	default:
 		return color.New(color.FgWhite)
 	}

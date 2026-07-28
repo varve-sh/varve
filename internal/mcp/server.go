@@ -12,6 +12,9 @@ import (
 	"github.com/memtrace-dev/memtrace/internal/types"
 )
 
+// mcpAgentName is the provenance stamped on writes arriving over MCP.
+const mcpAgentName = "mcp"
+
 // Serve starts the MCP server over stdio. Blocks until the connection closes,
 // then auto-saves a session summary if any memories were saved.
 func Serve(k *kernel.MemoryKernel) error {
@@ -29,10 +32,12 @@ func Serve(k *kernel.MemoryKernel) error {
 	// Auto-save session summary (best-effort, never blocks the shutdown).
 	if text := tracker.summary(); text != "" {
 		_, _, _ = k.Save(types.MemorySaveInput{
-			Content: text,
-			Type:    types.MemoryTypeEvent,
-			Source:  types.MemorySourceAgent,
-			Tags:    []string{"session"},
+			Content:   text,
+			Type:      types.MemoryTypeNote,
+			Source:    types.MemorySourceAgent,
+			Tags:      []string{"session"},
+			SessionID: tracker.sessionID(),
+			Agent:     mcpAgentName,
 		})
 	}
 
@@ -43,13 +48,13 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 	// Tool 1: memory_save
 	s.AddTool(
 		mcp.NewTool("memory_save",
-			mcp.WithDescription("Save a memory (decision, convention, fact, or event) to the local memory store. Use this when you learn something important about the project that should persist across sessions. If topic_key is provided and a memory with that key already exists, it is updated instead of creating a duplicate."),
+			mcp.WithDescription("Save a memory (decision, convention or note) to the local memory store. Decisions and conventions are governed: one you save is recorded as proposed and does not bind until a human accepts it. Use this when you learn something important about the project that should persist across sessions. If topic_key is provided and a memory with that key already exists, it is updated instead of creating a duplicate."),
 			mcp.WithString("content",
 				mcp.Required(),
 				mcp.Description("The memory content to save. Be specific and self-contained. Wrap sensitive details in <private>...</private> to prevent them from being stored."),
 			),
 			mcp.WithString("type",
-				mcp.Description("Memory type: decision, convention, fact, event. Default: fact"),
+				mcp.Description("Memory type: decision (governed, needs human confirmation before it binds), convention, or note. Default: note."),
 			),
 			mcp.WithArray("tags",
 				mcp.Description(`Tags for categorization, e.g. ["auth", "database"]`),
@@ -76,6 +81,8 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 				Tags:      tags,
 				FilePaths: filePaths,
 				TopicKey:  topicKey,
+				SessionID: tracker.sessionID(),
+				Agent:     mcpAgentName,
 			})
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -109,10 +116,12 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 
 			mem, _, err := k.Save(types.MemorySaveInput{
 				Content:   content,
-				Type:      types.MemoryTypeEvent,
+				Type:      types.MemoryTypeNote,
 				Source:    types.MemorySourceAgent,
 				Tags:      []string{"prompt"},
 				FilePaths: filePaths,
+				SessionID: tracker.sessionID(),
+				Agent:     mcpAgentName,
 			})
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -134,7 +143,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 				mcp.Description("Max results to return. Default: 10, max: 50"),
 			),
 			mcp.WithString("type",
-				mcp.Description("Filter by memory type: decision, convention, fact, event"),
+				mcp.Description("Filter by memory type: decision, convention, note"),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -147,9 +156,10 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			memType, _ := args["type"].(string)
 
 			results, err := k.Recall(types.MemoryRecallInput{
-				Query: query,
-				Limit: limit,
-				Type:  types.MemoryType(memType),
+				Query:     query,
+				Limit:     limit,
+				Type:      types.MemoryType(memType),
+				SessionID: tracker.sessionID(),
 			})
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -279,7 +289,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 				mcp.Description("New content"),
 			),
 			mcp.WithString("type",
-				mcp.Description("New type: decision, convention, fact, event"),
+				mcp.Description("New type. Notes cannot be promoted into decisions — save a decision instead."),
 			),
 			mcp.WithArray("tags",
 				mcp.Description(`New tags (replaces existing), e.g. ["auth", "api"]`),

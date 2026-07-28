@@ -7,11 +7,17 @@ import (
 	"time"
 
 	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/memtrace-dev/memtrace/internal/util"
 )
 
 // sessionTracker records MCP tool activity within a single server lifetime.
 // All methods are safe for concurrent use.
 type sessionTracker struct {
+	// id identifies this session for the whole of the server's lifetime. One
+	// MCP connection is one session (ADR-0004 D3, closed), and ADR-0001 D4
+	// requires every agent-sourced write to carry it — an unattributable
+	// decision is invisible to the attribution chain.
+	id          string
 	mu          sync.Mutex
 	startTime   time.Time
 	saved       []savedEntry
@@ -25,8 +31,11 @@ type savedEntry struct {
 }
 
 func newSessionTracker() *sessionTracker {
-	return &sessionTracker{startTime: time.Now().UTC()}
+	return &sessionTracker{id: util.GenerateID(), startTime: time.Now().UTC()}
 }
+
+// sessionID returns the identifier stamped on this session's events.
+func (t *sessionTracker) sessionID() string { return t.id }
 
 func (t *sessionTracker) recordSave(id, summary string, memType types.MemoryType) {
 	t.mu.Lock()

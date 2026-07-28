@@ -31,11 +31,14 @@ func newStatusCmd() *cobra.Command {
 
 			// Count by type
 			counts := map[string]int{}
+			// The v2 schema has three classes: two governed (decision,
+			// convention) and one note class — `fact` and `event` were
+			// collapsed, and what they distinguished now lives in tags
+			// (ADR-0001 D1, D9).
 			for _, t := range []types.MemoryType{
 				types.MemoryTypeDecision,
 				types.MemoryTypeConvention,
-				types.MemoryTypeFact,
-				types.MemoryTypeEvent,
+				types.MemoryTypeNote,
 			} {
 				n, _ := k.Count(t, "")
 				counts[string(t)] = n
@@ -43,15 +46,27 @@ func newStatusCmd() *cobra.Command {
 
 			// Count by status
 			statusCounts := map[string]int{}
+			// Note statuses plus the six decision lifecycle states (D2).
 			for _, s := range []types.MemoryStatus{
 				types.MemoryStatusActive,
 				types.MemoryStatusStale,
 				types.MemoryStatusArchived,
+				types.MemoryStatus(types.StatusProposed),
+				types.MemoryStatus(types.StatusViolated),
+				types.MemoryStatus(types.StatusSuperseded),
+				types.MemoryStatus(types.StatusReverted),
+				types.MemoryStatus(types.StatusRejected),
 			} {
 				n, _ := k.Count("", s)
+				if n == 0 {
+					continue
+				}
 				statusCounts[string(s)] = n
 			}
-			total := statusCounts["active"] + statusCounts["stale"] + statusCounts["archived"]
+			total := 0
+			for _, n := range statusCounts {
+				total += n
+			}
 
 			// DB size
 			dbSize := dbFileSize(dbPath)
@@ -59,15 +74,15 @@ func newStatusCmd() *cobra.Command {
 			embedProvider, embedModel := k.EmbedInfo()
 			if asJSON {
 				out := map[string]interface{}{
-					"project":       entry.Name,
-					"root":          projectRoot,
-					"db_path":       dbPath,
-					"db_size":       dbSize,
-					"total":         total,
-					"by_type":       counts,
-					"by_status":     statusCounts,
+					"project":        entry.Name,
+					"root":           projectRoot,
+					"db_path":        dbPath,
+					"db_size":        dbSize,
+					"total":          total,
+					"by_type":        counts,
+					"by_status":      statusCounts,
 					"embed_provider": embedProvider,
-					"embed_model":   embedModel,
+					"embed_model":    embedModel,
 				}
 				return json.NewEncoder(os.Stdout).Encode(out)
 			}

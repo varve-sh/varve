@@ -56,7 +56,7 @@ func newListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&limit, "limit", 20, "Max results")
-	cmd.Flags().StringVar(&memType, "type", "", "Filter by type: decision, convention, fact, event")
+	cmd.Flags().StringVar(&memType, "type", "", "Filter by type: decision, convention, note")
 	cmd.Flags().StringVar(&status, "status", "active", "Filter by status: active, stale, archived")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	return cmd

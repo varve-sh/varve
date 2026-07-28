@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -64,6 +65,10 @@ func newUpdateCmd() *cobra.Command {
 			}
 
 			mem, err := k.Update(id, input)
+			if errors.Is(err, types.ErrMemoryNotFound) {
+				fmt.Printf("Memory %s not found\n", id)
+				return nil
+			}
 			if err != nil {
 				return err
 			}
@@ -77,7 +82,7 @@ func newUpdateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&content, "content", "", "New content")
-	cmd.Flags().StringVar(&memType, "type", "", "New type: decision, convention, fact, event")
+	cmd.Flags().StringVar(&memType, "type", "", "New type: note (decisions cannot be reached by update)")
 	cmd.Flags().StringVar(&tags, "tags", "", "New comma-separated tags (replaces existing)")
 	cmd.Flags().StringVar(&files, "files", "", "New comma-separated file paths (replaces existing)")
 	cmd.Flags().Float64Var(&confidence, "confidence", 0, "New confidence score 0.0-1.0")

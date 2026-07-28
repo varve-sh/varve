@@ -353,23 +353,41 @@ func TestMemoryUpdateTool_Content(t *testing.T) {
 	}
 }
 
-func TestMemoryUpdateTool_TypeAndTags(t *testing.T) {
+func TestMemoryUpdateTool_Tags(t *testing.T) {
 	s, k := setupServer(t)
 
 	mem, _, _ := k.Save(types.MemorySaveInput{Content: "some fact", Type: types.MemoryTypeFact})
 
 	callTool(t, s, "memory_update", map[string]interface{}{
 		"id":   mem.ID,
-		"type": "decision",
 		"tags": []interface{}{"auth", "security"},
 	})
 
 	got, _ := k.Get(mem.ID)
-	if got.Type != types.MemoryTypeDecision {
-		t.Errorf("want decision, got %s", got.Type)
-	}
 	if len(got.Tags) != 2 || got.Tags[0] != "auth" {
 		t.Errorf("unexpected tags: %v", got.Tags)
+	}
+}
+
+// A note cannot be promoted into a decision by an update: they live in
+// different tables with different semantics, and a decision has to be born
+// through the lifecycle so its provenance and events exist (ADR-0001 D1, D2).
+func TestMemoryUpdateTool_CannotPromoteANoteToADecision(t *testing.T) {
+	s, k := setupServer(t)
+
+	mem, _, _ := k.Save(types.MemorySaveInput{Content: "some fact", Type: types.MemoryTypeFact})
+
+	result := callTool(t, s, "memory_update", map[string]interface{}{
+		"id":   mem.ID,
+		"type": "decision",
+	})
+	if !result.IsError {
+		t.Errorf("promoting a note to a decision must be refused, got: %v", resultText(t, result))
+	}
+
+	got, _ := k.Get(mem.ID)
+	if got.Type != types.MemoryTypeNote {
+		t.Errorf("the note must be unchanged, got type %s", got.Type)
 	}
 }
 
@@ -727,7 +745,6 @@ func TestSessionTracker_RecallTool_RecordsInTracker(t *testing.T) {
 	}
 }
 
-
 // --- memory_save topic_key ---
 
 func TestMemorySaveTool_TopicKey_CreatesNew(t *testing.T) {
@@ -801,8 +818,8 @@ func TestMemoryPromptTool_Basic(t *testing.T) {
 		t.Fatalf("expected 1 memory, got %d", len(all))
 	}
 	m := all[0]
-	if m.Type != types.MemoryTypeEvent {
-		t.Errorf("expected event type, got %s", m.Type)
+	if m.Type != types.MemoryTypeNote {
+		t.Errorf("expected note type, got %s", m.Type)
 	}
 	found := false
 	for _, tag := range m.Tags {

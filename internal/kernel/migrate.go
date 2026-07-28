@@ -49,17 +49,20 @@ func LatestSchemaVersion() int { return migrations[len(migrations)-1].version }
 // data would survive in `decisions`/`notes` and in the kept backup, but from
 // the user's point of view their memory would be gone, silently.
 //
-// So, until the §D10 port lands:
+// OPEN as of the §D10 read-path port. MemoryStore now reads `decisions` and
+// `notes` through one projection, recall searches both FTS tables, and
+// memory_context glob-matches decision scopes — so a converted database is
+// fully visible to every read path, and the canary that asserted the hole
+// fired and was removed.
 //
-//	MigrateFromV1 refuses, naming the reason;
-//	ApplySchema leaves a v1 database alone instead of refusing it, so it keeps
-//	  working on the v1 read paths.
+// With the gate open, ADR-0001 §D9's specified behaviour is in force:
+// MigrateFromV1 runs, and ApplySchema refuses a v1 database outright with
+// instructions to convert it. It has to refuse now — the read paths query v2
+// tables that do not exist in a v1 file, so serving one is no longer possible.
 //
-// Flipping this one variable to true restores exactly the behaviour ADR-0001
-// §D9 specifies: Open() refuses a v1 database with instructions, and the
-// conversion runs. That flip is the last step of the read-path port, and it is
-// deliberately a single edit with tests on both sides of it.
-var v2ReadPathsReady = false
+// The variable stays rather than being deleted: it is the seam that made the
+// deviation reviewable, and the tests still exercise both sides of it.
+var v2ReadPathsReady = true
 
 // V2ReadPathsReady reports whether the v2 read paths (ADR-0001 §D10) are
 // wired up, and therefore whether the v1→v2 conversion may run.

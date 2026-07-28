@@ -25,6 +25,8 @@ type MemoryKernel struct {
 	projectID string
 	db        *sql.DB
 	store     *MemoryStore
+	decisions *DecisionStore
+	notes     *NoteStore
 	pipeline  *retrieval.Pipeline
 	embedder  embedding.Embedder // nil when embeddings are not configured
 }
@@ -96,6 +98,8 @@ func (k *MemoryKernel) Open() error {
 	}
 	k.db = db
 	k.store = NewStore(db)
+	k.decisions = NewDecisionStore(db)
+	k.notes = NewNoteStore(db)
 	k.pipeline = retrieval.New(k.store, k.projectID) // MemoryStore satisfies retrieval.StoreReader
 
 	// Wire up optional embedder.
@@ -142,7 +146,7 @@ func (k *MemoryKernel) Close() error {
 func (k *MemoryKernel) Save(input types.MemorySaveInput) (*types.Memory, bool, error) {
 	// Apply defaults
 	if input.Type == "" {
-		input.Type = types.MemoryTypeFact
+		input.Type = types.MemoryTypeNote
 	}
 	if input.Source == "" {
 		input.Source = types.MemorySourceUser
@@ -161,6 +165,15 @@ func (k *MemoryKernel) Save(input types.MemorySaveInput) (*types.Memory, bool, e
 
 	if input.Summary == "" && input.Content != "" {
 		input.Summary = truncate(input.Content, 120)
+	}
+
+	// Decisions and conventions are governed: they carry a lifecycle, they are
+	// born quarantined unless the human saved them directly, and every write
+	// emits its event (ADR-0001 D1, D2, D7). They never take the note path,
+	// including the topic_key branch below — a decision saved under an existing
+	// key becomes a proposed successor, not an in-place update (D4).
+	if input.Type.IsDecision() {
+		return k.saveDecision(input)
 	}
 
 	// Topic key upsert: if a key is provided and an active memory already has it,
@@ -212,6 +225,7 @@ func (k *MemoryKernel) Save(input types.MemorySaveInput) (*types.Memory, bool, e
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
+	mem.Type = types.MemoryTypeNote
 
 	if err := k.store.Insert(mem); err != nil {
 		return nil, false, fmt.Errorf("saving memory: %w", err)
@@ -252,10 +266,48 @@ func (k *MemoryKernel) Update(id string, input types.MemoryUpdateInput) (*types.
 	return k.store.FindByID(id)
 }
 
-// Delete hard-deletes a memory by ID. Returns false if not found.
+// Delete removes a memory.
+//
+// Notes keep v1 hard-delete semantics. A decision that has any event history is
+// never hard-deleted (ADR-0001 D3): "forget" maps onto a lifecycle transition —
+// `rejected` while proposed, `reverted` once binding — so the audit record
+// survives. Only an event-free decision can actually be dropped, and the FK
+// from `events` is the backstop.
 func (k *MemoryKernel) Delete(id string) (bool, error) {
-	return k.store.DeleteByID(id)
+	class, err := k.store.classOf(id)
+	if err != nil || class == "" {
+		return false, err
+	}
+	if class == "note" {
+		return k.store.DeleteByID(id)
+	}
+
+	d, err := k.decisions.GetDecision(id)
+	if err != nil {
+		return false, err
+	}
+	events, err := k.decisions.Events(EventFilter{DecisionID: id, Limit: 1})
+	if err != nil {
+		return false, err
+	}
+	if len(events) == 0 {
+		return k.store.DeleteByID(id)
+	}
+	switch d.Status {
+	case types.StatusProposed:
+		return true, k.decisions.Reject(id, "forgotten")
+	case types.StatusActive, types.StatusViolated:
+		return true, k.decisions.Revert(id, RevertOptions{Via: "human", Actor: types.ActorHuman})
+	default:
+		return false, nil // already terminal — nothing to do
+	}
 }
+
+// Decisions exposes the governed store for callers that need the lifecycle.
+func (k *MemoryKernel) Decisions() *DecisionStore { return k.decisions }
+
+// Notes exposes the ungoverned store.
+func (k *MemoryKernel) Notes() *NoteStore { return k.notes }
 
 // List returns memories matching the given options.
 func (k *MemoryKernel) List(opts types.ListOptions) ([]types.Memory, error) {
@@ -275,9 +327,10 @@ func (k *MemoryKernel) Recall(input types.MemoryRecallInput) ([]types.ScoredMemo
 	if input.Limit > 50 {
 		input.Limit = 50
 	}
-	if input.Status == "" {
-		input.Status = types.MemoryStatusActive
-	}
+	// No status default: empty means "everything live" — non-terminal decisions
+	// plus active notes (ADR-0001 D10). Defaulting to `active` here would hide
+	// every `proposed` and `violated` decision, and a violated decision is
+	// still binding.
 
 	results, err := k.pipeline.Recall(input)
 	if err != nil {
@@ -286,9 +339,18 @@ func (k *MemoryKernel) Recall(input types.MemoryRecallInput) ([]types.ScoredMemo
 
 	// Update access tracking for returned memories
 	now := time.Now().UTC()
+	ids := make([]string, 0, len(results))
 	for _, r := range results {
 		_ = k.store.TouchAccess(r.Memory.ID, now)
+		ids = append(ids, r.Memory.ID)
 	}
+
+	// recall.served (ADR-0001 D7). The legacy read path is instrumented from
+	// the same day as the packer so the packer-vs-recall comparison (Phase 0
+	// ruling 3, ADR-0002 P11) is available from event one. Emission never fails
+	// a recall: a read path that errors because its telemetry failed would be a
+	// worse bug than missing telemetry.
+	_ = k.decisions.RecordRecall(k.projectID, input, ids)
 
 	return results, nil
 }
@@ -389,7 +451,12 @@ type ScanResult struct {
 // or modified more recently than the memory was last updated.
 // projectRoot is the absolute path to the project directory (file_paths are relative to it).
 func (k *MemoryKernel) ScanStaleness(projectRoot string) (ScanResult, error) {
+	// Notes only. Staleness is v1's mtime heuristic and it still serves notes
+	// (ADR-0001 open question 8). Decisions do not go stale: they have expiry,
+	// which is a derived predicate and changes no state (D2), and mtime is not
+	// evidence that a decision stopped being true.
 	memories, err := k.store.List(types.ListOptions{
+		Type:   types.MemoryTypeNote,
 		Status: types.MemoryStatusActive,
 		Limit:  10000,
 	})
@@ -550,9 +617,11 @@ func (k *MemoryKernel) Stats(window time.Duration) (StatsResult, error) {
 		return StatsResult{}, err
 	}
 
-	// Sessions are event memories tagged "session"
+	// Sessions are notes tagged "session". The tag is the discriminator, not the
+	// type: the v2 schema has one note class and D9 preserves the tag exactly so
+	// this keeps working.
 	sessions, err := k.store.List(types.ListOptions{
-		Type:   types.MemoryTypeEvent,
+		Type:   types.MemoryTypeNote,
 		Status: types.MemoryStatusActive,
 		Sort:   "created_at",
 		Limit:  1000,
@@ -619,4 +688,91 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen-3]) + "..."
+}
+
+// saveDecision is Save's governed branch (ADR-0001 D1, D2, D4).
+//
+// Birth state follows the source, not the caller's wishes: a `user` save is the
+// human's own CLI/TUI action, so it is proposed and accepted in one transaction
+// (D2's "the human is the confirmation", implemented as a real transition so
+// the decision.accepted event exists). Everything else — agent, git, import,
+// derived — is quarantined as `proposed` until a human accepts it. This is the
+// behaviour change ADR-0001's Consequences section calls out: an agent's
+// decisions no longer bind on save.
+func (k *MemoryKernel) saveDecision(input types.MemorySaveInput) (*types.Memory, bool, error) {
+	title := input.Summary
+	if title == "" {
+		title = truncate(input.Content, 120)
+	}
+	if i := strings.IndexAny(title, "\r\n"); i >= 0 {
+		title = strings.TrimSpace(title[:i])
+	}
+	if r := []rune(title); len(r) > 200 {
+		title = string(r[:200])
+	}
+	if title == "" {
+		return nil, false, &types.ValidationError{
+			Field: "content", Message: "a decision needs a title — provide content or a summary",
+		}
+	}
+
+	in := DecisionInput{
+		ProjectID:  k.projectID,
+		Kind:       types.DecisionKind(input.Type),
+		Title:      title,
+		Body:       input.Content,
+		Scope:      input.FilePaths,
+		Confidence: input.Confidence,
+		Source:     types.DecisionSource(input.Source),
+		SourceRef:  input.SourceRef,
+		Agent:      input.Agent,
+		Model:      input.Model,
+		SessionID:  input.SessionID,
+		TopicKey:   input.TopicKey,
+		Tags:       input.Tags,
+	}
+	// A source_ref is the closest thing a save carries to evidence, and
+	// attaching it here is what keeps CLI-saved decisions off the `forced` list
+	// (D4) — the same rule the v1→v2 migration applies.
+	if ref := strings.TrimSpace(input.SourceRef); ref != "" {
+		ev := EvidenceInput{Kind: types.EvidenceKindImport, Ref: ref, AddedBy: types.ActorSystem}
+		if sha, ok := strings.CutPrefix(ref, "git:"); ok && sha != "" {
+			ev = EvidenceInput{Kind: types.EvidenceKindCommit, Ref: sha, AddedBy: types.ActorSystem}
+		}
+		in.Evidence = append(in.Evidence, ev)
+	}
+
+	var d *types.Decision
+	var err error
+	if in.Source.MayBeBornActive() {
+		d, err = k.decisions.ProposeAccepted(in, AcceptOptions{
+			// Forced only when there is genuinely no evidence. The flag is the
+			// audit trail's record of which decisions are unevidenced, so it
+			// has to mean that and nothing else.
+			Force: len(in.Evidence) == 0,
+			Actor: types.ActorHuman,
+		})
+	} else {
+		d, err = k.decisions.Propose(in)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("saving decision: %w", err)
+	}
+
+	if k.embedder != nil {
+		go func(id, text string) {
+			vec, embedErr := k.embedder.Embed(text)
+			if embedErr == nil {
+				_ = k.store.StoreEmbedding(id, vec)
+			}
+		}(d.ID, input.Content)
+	}
+
+	mem, err := k.store.FindByID(d.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	// A topic_key collision creates a successor, never an in-place update (D4),
+	// so this path never reports an upsert.
+	return mem, false, nil
 }

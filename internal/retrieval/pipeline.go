@@ -13,7 +13,6 @@ import (
 // Defined here (not in kernel/) to avoid circular imports.
 type StoreReader interface {
 	SearchFTS(query string, projectID string, limit int) ([]types.FTSResult, error)
-	FindByRowID(rowid int64) (*types.Memory, error)
 	FindByID(id string) (*types.Memory, error)
 	FindEmbeddings(projectID string) ([]EmbeddingRow, error)
 }
@@ -67,7 +66,7 @@ func (p *Pipeline) Recall(input types.MemoryRecallInput) ([]types.ScoredMemory, 
 	candidates := make([]candidate, 0, len(ftsResults))
 	ftsIDs := make(map[string]bool, len(ftsResults))
 	for _, r := range ftsResults {
-		mem, err := p.store.FindByRowID(r.RowID)
+		mem, err := p.store.FindByID(r.ID)
 		if err != nil || mem == nil {
 			continue
 		}
@@ -163,7 +162,13 @@ func passesFilters(m *types.Memory, input types.MemoryRecallInput) bool {
 	if input.Status != "" && m.Status != input.Status {
 		return false
 	}
-	if input.Type != "" && m.Type != input.Type {
+	// An empty status filter means "everything live". The store already
+	// excludes terminal decisions, but the semantic-only path can reach rows
+	// the FTS query never filtered, so it is re-checked here (ADR-0001 D10).
+	if input.Status == "" && types.IsTerminalMemoryStatus(m.Status) {
+		return false
+	}
+	if input.Type != "" && m.Type.Canonical() != input.Type.Canonical() {
 		return false
 	}
 	if input.MinConfidence > 0 && m.Confidence < input.MinConfidence {
