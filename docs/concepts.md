@@ -118,30 +118,6 @@ memtrace list --type event
 
 ---
 
-## Memory-to-code linking
-
-`memtrace link` parses source files and creates one memory per top-level symbol — functions, types, classes, interfaces, structs, enums, and traits. Supports Go (via `go/ast`), TypeScript, JavaScript, Python, and Rust.
-
-```bash
-memtrace link src/auth/middleware.go
-
-# Linking src/auth/middleware.go (3 symbols):
-#   saved  01KMFOO...  function `ValidateJWT`
-#   saved  01KMBAR...  struct `AuthConfig`
-#   saved  01KMBAZ...  interface `Validator`
-# 3 symbols linked.
-```
-
-Preview without saving:
-
-```bash
-memtrace link --dry-run src/auth/*.go
-```
-
-Linked memories are tagged `symbol`, the kind (`function`, `struct`, etc.), and the language. They are linked to the source file path, so `memory_context` and `memtrace scan` pick them up automatically.
-
----
-
 ## Storage
 
 All data lives in `.memtrace/memtrace.db` — SQLite with WAL mode, local-only, no account required. The `.memtrace/` directory is added to `.gitignore` automatically on init.

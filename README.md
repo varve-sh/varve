@@ -59,7 +59,6 @@ All data lives in `.memtrace/memtrace.db` — SQLite, local only, no account req
 - **File-aware context** — `memory_context(file_paths)` surfaces conventions and decisions linked to the files you're editing.
 - **Confidence decay** — memories age gracefully. Recalled memories stay fresh; stale ones fade.
 - **Staleness detection** — `memtrace scan` flags memories whose referenced files have changed.
-- **Symbol linking** — `memtrace link` parses source files (Go, TypeScript, Python, Rust) and creates one memory per top-level symbol.
 - **Private content** — wrap sensitive details in `<private>...</private>` and they're stripped before storage.
 - **Works everywhere** — one binary, no daemon, no Docker. Sets up in any editor in one command.
 

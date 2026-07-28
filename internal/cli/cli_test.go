@@ -738,68 +738,6 @@ func TestReindexCmd_WithEmbedder(t *testing.T) {
 	}
 }
 
-// --- link ---
-
-func TestLinkCmd_GoFile(t *testing.T) {
-	_, root := setupProject(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
-
-	goFile := filepath.Join(root, "auth.go")
-	os.WriteFile(goFile, []byte(`package main
-
-// ValidateJWT checks the JWT token.
-func ValidateJWT(token string) bool { return true }
-
-type AuthConfig struct{ secret string }
-`), 0644)
-
-	out, err := runCmd(t, "link", goFile)
-	if err != nil {
-		t.Fatalf("unexpected error: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "ValidateJWT") {
-		t.Errorf("expected ValidateJWT in output, got: %s", out)
-	}
-	if !strings.Contains(out, "AuthConfig") {
-		t.Errorf("expected AuthConfig in output, got: %s", out)
-	}
-}
-
-func TestLinkCmd_DryRun(t *testing.T) {
-	_, root := setupProject(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
-
-	goFile := filepath.Join(root, "main.go")
-	os.WriteFile(goFile, []byte("package main\nfunc Foo() {}\n"), 0644)
-
-	out, err := runCmd(t, "link", "--dry-run", goFile)
-	if err != nil {
-		t.Fatalf("unexpected error: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "dry-run") {
-		t.Errorf("expected dry-run indicator, got: %s", out)
-	}
-	if !strings.Contains(out, "Foo") {
-		t.Errorf("expected symbol name in dry-run output, got: %s", out)
-	}
-}
-
-func TestLinkCmd_UnsupportedFile(t *testing.T) {
-	_, root := setupProject(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
-
-	mdFile := filepath.Join(root, "README.md")
-	os.WriteFile(mdFile, []byte("# hello"), 0644)
-
-	out, err := runCmd(t, "link", mdFile)
-	if err != nil {
-		t.Fatalf("unexpected error: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "skip") && !strings.Contains(out, "unsupported") {
-		t.Errorf("expected skip/unsupported message, got: %s", out)
-	}
-}
-
 // --- doctor ---
 
 func TestDoctorCmd_AllOK(t *testing.T) {

@@ -16,7 +16,6 @@ memtrace serve   [--dir <path>]
 memtrace status  [--json]
 memtrace reindex
 memtrace scan
-memtrace link    <file> [file...] [--dry-run] [--type fact]
 memtrace doctor
 memtrace config  get
 memtrace config  set <key> <value>
@@ -161,19 +160,6 @@ memtrace scan
 ```
 
 Review with `memtrace list --status stale`.
-
----
-
-## `memtrace link`
-
-Parses source files and creates one memory per top-level symbol. Supports Go (AST), TypeScript, JavaScript, Python, and Rust (regex).
-
-```bash
-memtrace link src/auth/middleware.go
-memtrace link --dry-run src/auth/*.go
-```
-
-Linked memories are tagged `symbol`, the kind (`function`, `struct`, etc.), and the language. They are linked to the source file path so `memory_context` picks them up automatically.
 
 ---
 

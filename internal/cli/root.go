@@ -32,7 +32,6 @@ func NewRootCmd(version ...string) *cobra.Command {
 		newReindexCmd(),
 		newScanCmd(),
 		newDoctorCmd(),
-		newLinkCmd(),
 		newConfigCmd(),
 		newStatsCmd(),
 	)
