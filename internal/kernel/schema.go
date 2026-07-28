@@ -1,16 +1,13 @@
 package kernel
 
-import (
-	"database/sql"
-	"fmt"
-)
-
-const schemaSQL = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
-PRAGMA synchronous = NORMAL;
-
+// baselineV1SQL is migration 1: the recorded v1 baseline. It is the shape a v1
+// database has once the old ad-hoc addColumnIfMissing calls have run (embedding
+// and topic_key present), captured so that a fresh database is built by the
+// migration framework rather than by ad-hoc DDL.
+//
+// It is frozen. The `memories` table is retired by the v2 tables (ADR-0001 D1)
+// and its rows are carried over by MigrateFromV1; nothing new writes here.
+const baselineV1SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
 );
@@ -36,13 +33,22 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     accessed_at   TEXT,
-    access_count  INTEGER NOT NULL DEFAULT 0
+    access_count  INTEGER NOT NULL DEFAULT 0,
+
+    -- Column order is load-bearing: the v1 store reads with SELECT *, and in a
+    -- real v1 database these two arrived via ALTER TABLE ADD COLUMN, so they
+    -- sit last. The baseline must reproduce the recorded shape, not a tidier one.
+    embedding     TEXT DEFAULT NULL,
+    topic_key     TEXT DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id);
 CREATE INDEX IF NOT EXISTS idx_memories_type    ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_memories_status  ON memories(status);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_topic_key
+    ON memories(project_id, topic_key)
+    WHERE topic_key IS NOT NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content,
@@ -70,57 +76,3 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
     VALUES (new.rowid, new.content, new.summary, new.tags);
 END;
 `
-
-// ApplySchema applies the database schema, sets runtime PRAGMAs, and runs migrations.
-func ApplySchema(db *sql.DB) error {
-	if _, err := db.Exec(schemaSQL); err != nil {
-		return err
-	}
-	return runMigrations(db)
-}
-
-// runMigrations applies incremental schema changes to existing databases.
-func runMigrations(db *sql.DB) error {
-	if err := addColumnIfMissing(db, "memories", "embedding", "TEXT DEFAULT NULL"); err != nil {
-		return fmt.Errorf("migration (embedding column): %w", err)
-	}
-	if err := addColumnIfMissing(db, "memories", "topic_key", "TEXT DEFAULT NULL"); err != nil {
-		return fmt.Errorf("migration (topic_key column): %w", err)
-	}
-	if _, err := db.Exec(`
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_topic_key
-		ON memories(project_id, topic_key)
-		WHERE topic_key IS NOT NULL
-	`); err != nil {
-		return fmt.Errorf("migration (topic_key index): %w", err)
-	}
-	return nil
-}
-
-// addColumnIfMissing adds a column to a table only if it does not already exist.
-func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull, pk int
-		var dfltValue sql.NullString
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
-			return err
-		}
-		if name == column {
-			return nil // already exists
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition)
-	return err
-}

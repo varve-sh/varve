@@ -2,7 +2,9 @@ package kernel
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +29,18 @@ type MemoryKernel struct {
 	embedder  embedding.Embedder // nil when embeddings are not configured
 }
 
+// OpenDB opens a SQLite database with the per-connection PRAGMAs of ADR-0001
+// §D8 baked into the DSN. database/sql pools connections, so PRAGMAs issued as
+// statements only bind the one connection that ran them — foreign_keys in
+// particular has to come from the DSN or the events→decisions FK that blocks
+// hard-deleting a decision with history is silently unenforced.
+func OpenDB(path string) (*sql.DB, error) {
+	dsn := "file:" + path + "?" + url.Values{
+		"_pragma": {"foreign_keys(1)", "busy_timeout(5000)", "synchronous(NORMAL)"},
+	}.Encode()
+	return sql.Open("sqlite", dsn)
+}
+
 // New creates a new MemoryKernel. Call Open() before any other method.
 func New(dbPath string, projectID string) *MemoryKernel {
 	return &MemoryKernel{
@@ -37,12 +51,15 @@ func New(dbPath string, projectID string) *MemoryKernel {
 
 // Open opens the database connection, applies the schema, and sets PRAGMAs.
 func (k *MemoryKernel) Open() error {
-	db, err := sql.Open("sqlite", k.dbPath)
+	db, err := OpenDB(k.dbPath)
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
 	}
 	if err := ApplySchema(db); err != nil {
 		db.Close()
+		if errors.Is(err, types.ErrLegacyDatabase) {
+			return err
+		}
 		return fmt.Errorf("applying schema: %w", err)
 	}
 	k.db = db
@@ -475,11 +492,11 @@ func filePathsToQuery(paths []string) string {
 
 // StatsResult holds usage metrics for the memory store.
 type StatsResult struct {
-	TotalActive     int
-	SavedThisWeek   int
-	RecallsThisWeek int
+	TotalActive      int
+	SavedThisWeek    int
+	RecallsThisWeek  int
 	SessionsThisWeek int
-	TopAccessed     []types.Memory
+	TopAccessed      []types.Memory
 }
 
 // Stats returns usage metrics over the last window duration.
