@@ -182,7 +182,7 @@ func MigrateFromV1(opts MigrateV1Options) (*MigrationReport, error) {
 // embedding field, while the row mapping requires embeddings to carry over
 // (the content is unchanged, so the vectors stay valid). Both hold this way.
 func exportV1(path string) ([]types.Memory, map[string]string, int, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=query_only(true)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+escapeDSNPath(path)+"?_pragma=query_only(true)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("opening v1 database: %w", err)
 	}

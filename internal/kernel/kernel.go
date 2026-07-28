@@ -35,10 +35,42 @@ type MemoryKernel struct {
 // particular has to come from the DSN or the events→decisions FK that blocks
 // hard-deleting a decision with history is silently unenforced.
 func OpenDB(path string) (*sql.DB, error) {
-	dsn := "file:" + path + "?" + url.Values{
+	dsn := "file:" + escapeDSNPath(path) + "?" + url.Values{
 		"_pragma": {"foreign_keys(1)", "busy_timeout(5000)", "synchronous(NORMAL)"},
+		// BEGIN IMMEDIATE, not BEGIN DEFERRED. Our write transactions read
+		// before they write (topic_key holder lookup, evidence count), and a
+		// deferred transaction that upgrades read→write is failed by SQLite
+		// with SQLITE_BUSY_SNAPSHOT *without* invoking the busy handler — so
+		// §D8's busy_timeout bought nothing on exactly the path that needed
+		// it. Taking the write lock up front puts the contention where
+		// busy_timeout applies. Measured: 6 writers x 40 propose+accept cycles
+		// went from ~25 failures in 480 operations to zero.
+		"_txlock": {"immediate"},
 	}.Encode()
 	return sql.Open("sqlite", dsn)
+}
+
+// escapeDSNPath percent-encodes the characters that would otherwise be read as
+// DSN or URI syntax rather than as part of the filename.
+//
+// The driver finds the query string with the *first* '?' in the DSN, and hands
+// the whole string to SQLite with SQLITE_OPEN_URI, which parses '?' and '#'
+// itself and percent-decodes what remains. A project path containing any of
+// them therefore truncates the query string, and the PRAGMAs — foreign_keys
+// among them — silently do not apply. That is the exact failure this DSN was
+// introduced to fix, so it must not be reachable through a directory name.
+func escapeDSNPath(path string) string {
+	var b strings.Builder
+	b.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		switch c := path[i]; c {
+		case '%', '?', '#':
+			fmt.Fprintf(&b, "%%%02X", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // New creates a new MemoryKernel. Call Open() before any other method.
