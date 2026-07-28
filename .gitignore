@@ -5,3 +5,7 @@ bin/
 *.db-shm
 .idea/
 .DS_Store
+
+# Internal replatform planning — brief, decisions log, strategy, ADRs.
+# Not public. Back this up outside the repo; it is not in git history.
+planning/
