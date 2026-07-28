@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,7 @@ func populatedV1DB(t *testing.T) (string, []v1Row) {
 	}
 
 	successor := util.GenerateID()
+	noteSuccessor := util.GenerateID()
 	rows := []v1Row{
 		{id: util.GenerateID(), memType: types.MemoryTypeDecision, content: "Use ULIDs for all ids.",
 			summary: "Use ULIDs for all ids", source: types.MemorySourceGit, sourceRef: "git:deadbeef",
@@ -81,6 +83,17 @@ func populatedV1DB(t *testing.T) (string, []v1Row) {
 		{id: util.GenerateID(), memType: types.MemoryTypeEvent, content: "Session summary: shipped the packer.",
 			summary: "Session summary", source: types.MemorySourceAgent,
 			status: types.MemoryStatusArchived, tags: []string{"session"}, confidence: 1.0},
+		// Row 10: archived decision whose v1 successor is a *fact*, so it
+		// becomes a note and cannot be pointed at. §D9's else branch applies:
+		// rejected. It carries a topic_key, which must not end up held by a
+		// non-terminal row.
+		{id: util.GenerateID(), memType: types.MemoryTypeDecision, content: "Archived, successor is a note.",
+			summary: "Archived, successor is a note", source: types.MemorySourceUser,
+			status: types.MemoryStatusArchived, supersededBy: noteSuccessor,
+			topicKey: "zombie-topic", confidence: 1.0},
+		{id: noteSuccessor, memType: types.MemoryTypeFact, content: "The note that replaced it.",
+			summary: "The replacing note", source: types.MemorySourceUser,
+			status: types.MemoryStatusActive, confidence: 1.0},
 	}
 
 	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
@@ -139,9 +152,9 @@ func TestMigrateFromV1_RoundTripFidelity(t *testing.T) {
 			report.Decisions, report.Notes, report.Exported)
 	}
 
-	// Type split: 7 decisions/conventions, 3 facts/events.
-	if report.Decisions != 7 || report.Notes != 3 {
-		t.Errorf("decisions = %d, notes = %d; want 7 and 3", report.Decisions, report.Notes)
+	// Type split: 8 decisions/conventions, 4 facts/events.
+	if report.Decisions != 8 || report.Notes != 4 {
+		t.Errorf("decisions = %d, notes = %d; want 8 and 4", report.Decisions, report.Notes)
 	}
 
 	db, err := OpenDB(path)
@@ -291,6 +304,29 @@ func TestMigrateFromV1_RowMapping(t *testing.T) {
 	}
 	if d.SupersededBy != rows[5].id {
 		t.Errorf("row 4 superseded_by = %q, want %q", d.SupersededBy, rows[5].id)
+	}
+
+	// 10: archived, successor became a note -> rejected, not resurrected as a
+	// live proposal. §D9 has exactly two destinations for an archived row.
+	d = get(10)
+	if d.Status != types.StatusRejected {
+		t.Errorf("row 10 status = %s, want rejected — an archived decision whose successor "+
+			"is a note must not come back as a live proposal", d.Status)
+	}
+	if d.SupersededBy != "" {
+		t.Errorf("row 10 superseded_by = %q, want empty", d.SupersededBy)
+	}
+	// It is terminal, so its carried-over topic_key is exempt from the
+	// non-terminal unique index and cannot pre-link a real new decision to it.
+	live, err := ds.ListDecisions(DecisionFilter{
+		ProjectID: testProject, TopicKey: "zombie-topic",
+		Statuses: []types.DecisionStatus{types.StatusProposed, types.StatusActive, types.StatusViolated},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 0 {
+		t.Errorf("%d non-terminal rows hold the archived row's topic_key, want 0", len(live))
 	}
 
 	// 6: convention keeps its kind and gets no expiry.
@@ -474,5 +510,111 @@ func TestMigrateFromV1_MigratedDatabaseIsFullyUsable(t *testing.T) {
 	addCommitEvidence(t, ds, d.ID, "sha-post")
 	if _, err := ds.Accept(d.ID, AcceptOptions{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// No archived v1 row may be left in the `proposed` staging status the second
+// pass uses. This is the invariant F3 broke, asserted directly over the whole
+// fixture rather than row by row.
+func TestMigrateFromV1_NoArchivedRowSurvivesAsAProposal(t *testing.T) {
+	defer SetV2ReadPathsReady(true)()
+	path, rows := populatedV1DB(t)
+	if _, err := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: testProject}); err != nil {
+		t.Fatal(err)
+	}
+	db, _ := OpenDB(path)
+	defer db.Close()
+	if err := ApplySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	ds := NewDecisionStore(db)
+
+	for i, r := range rows {
+		if r.status != types.MemoryStatusArchived {
+			continue
+		}
+		d, err := ds.GetDecision(r.id)
+		if err != nil {
+			continue // it became a note; §D9 carries note status verbatim
+		}
+		switch d.Status {
+		case types.StatusSuperseded, types.StatusRejected:
+		default:
+			t.Errorf("v1 row %d was archived but is now %s; §D9 allows only superseded "+
+				"or rejected", i, d.Status)
+		}
+	}
+}
+
+// The falsifier-5 check must be capable of firing. It counts the destination
+// tables inside the transaction, so a reimport that drops rows aborts before
+// commit and leaves the backup as the recovery path.
+func TestMigrateFromV1_CountCheckFiresOnALossyReimport(t *testing.T) {
+	defer SetV2ReadPathsReady(true)()
+	path, rows := populatedV1DB(t)
+
+	exported, embeddings, _, err := exportV1(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exported) != len(rows) {
+		t.Fatalf("exported %d, want %d", len(exported), len(rows))
+	}
+
+	// A fresh v2 database, and a report that claims one more row than the
+	// reimport will actually write — the shape of any silent row loss.
+	dst := filepath.Join(t.TempDir(), "v2.db")
+	db, err := OpenDB(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := ApplySchema(db); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := MigrateV1Options{DBPath: dst, BackupPath: dst + ".bak", ProjectID: testProject}
+
+	// An unrelated row already in the destination stands in for any way the
+	// destination can end up holding a different number of rows than the
+	// migration believes it wrote. The old check compared the migration's own
+	// counters against each other and could not notice.
+	if _, err := NewNoteStore(db).Insert(NoteInput{
+		ProjectID: testProject, Content: "a row the migration did not write",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := reimport(db, exported, embeddings, opts); err == nil {
+		t.Fatal("the count check must fire when the destination does not hold what was exported")
+	} else if !strings.Contains(err.Error(), "aborting") {
+		t.Errorf("expected an abort naming the mismatch, got: %v", err)
+	}
+
+	// Nothing was committed: the stray row is still the only one there.
+	var decisions, notes int
+	db.QueryRow(`SELECT COUNT(*) FROM decisions`).Scan(&decisions)
+	db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&notes)
+	if decisions != 0 || notes != 1 {
+		t.Errorf("a failed count check must roll back; got %d decisions, %d notes", decisions, notes)
+	}
+
+	// And the honest path still succeeds on a clean destination.
+	clean := filepath.Join(t.TempDir(), "clean.db")
+	cdb, err := OpenDB(clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cdb.Close()
+	if err := ApplySchema(cdb); err != nil {
+		t.Fatal(err)
+	}
+	report, err := reimport(cdb, exported, embeddings,
+		MigrateV1Options{DBPath: clean, BackupPath: clean + ".bak", ProjectID: testProject})
+	if err != nil {
+		t.Fatalf("the honest reimport must succeed: %v", err)
+	}
+	if report.Decisions+report.Notes != len(rows) {
+		t.Errorf("reimported %d rows, want %d", report.Decisions+report.Notes, len(rows))
 	}
 }

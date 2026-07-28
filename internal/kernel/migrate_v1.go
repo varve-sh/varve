@@ -127,6 +127,16 @@ func MigrateFromV1(opts MigrateV1Options) (*MigrationReport, error) {
 	// 1–2. Export read-only and verify the count against the source table.
 	rows, embeddings, sourceCount, err := exportV1(opts.DBPath)
 	if err != nil {
+		// A previous run that died between moving the v1 file aside and
+		// finishing the reimport leaves a partial v2 file here and the real
+		// data in the backup. Say so, rather than "this is not a v1 database".
+		if _, statErr := os.Stat(opts.BackupPath); statErr == nil {
+			return nil, fmt.Errorf("%w\n\n"+
+				"A v1 backup already exists at %s. An earlier conversion probably did not "+
+				"finish: your data is in that file, and %s may be a partial v2 database. "+
+				"Move the backup back over it before retrying",
+				err, opts.BackupPath, opts.DBPath)
+		}
 		return nil, err
 	}
 	if len(rows) != sourceCount {
@@ -160,17 +170,9 @@ func MigrateFromV1(opts MigrateV1Options) (*MigrationReport, error) {
 	// 5–6. Reimport, verify, and record the one event this path is allowed to
 	// write (§D7: no synthetic per-row histories — we do not fabricate events
 	// we did not observe).
-	report, err := reimport(db, rows, embeddings, opts)
-	if err != nil {
-		return nil, err
-	}
-	if report.Decisions+report.Notes+len(report.Skipped) != report.Exported {
-		return nil, fmt.Errorf(
-			"aborting: reimported %d decisions + %d notes + %d skipped != %d exported rows; "+
-				"the v1 backup at %s is intact",
-			report.Decisions, report.Notes, len(report.Skipped), report.Exported, opts.BackupPath)
-	}
-	return report, nil
+	// The destination-side count check lives inside reimport's transaction, so
+	// a mismatch aborts before anything is committed.
+	return reimport(db, rows, embeddings, opts)
 }
 
 // exportV1 reads every v1 row, in every status and of every type, from a
@@ -281,6 +283,18 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 	// stays honest even here).
 	supersessions := map[string]string{}
 
+	// Which v1 ids will become decisions at all. A v1 archived row whose
+	// successor becomes a *note* has no decision to point at, so it takes
+	// §D9's other branch — `rejected` — and must never enter the `proposed`
+	// staging status, or an archived decision comes back as a live proposal.
+	willBeDecision := make(map[string]bool, len(rows))
+	for i := range rows {
+		switch rows[i].Type {
+		case types.MemoryTypeDecision, types.MemoryTypeConvention:
+			willBeDecision[rows[i].ID] = true
+		}
+	}
+
 	for i := range rows {
 		m := &rows[i]
 		if projectID == "" {
@@ -288,7 +302,7 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 		}
 		switch m.Type {
 		case types.MemoryTypeDecision, types.MemoryTypeConvention:
-			n, skipped, err := insertMigratedDecision(tx, m, embeddings[m.ID], supersessions, report)
+			n, skipped, err := insertMigratedDecision(tx, m, embeddings[m.ID], willBeDecision, supersessions, report)
 			if err != nil {
 				return nil, err
 			}
@@ -327,26 +341,49 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 		}
 	}
 
-	// Second pass: v1 archived decisions that named a successor.
+	// Second pass: v1 archived decisions that named a decision successor. The
+	// staging status is `proposed`, which is non-terminal, so every row entered
+	// here must leave here — a row left staged is an archived decision
+	// resurrected as a live proposal.
+	now := time.Now().UTC()
 	for id, successor := range supersessions {
 		var n int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM decisions WHERE id = ?`, successor).Scan(&n); err != nil {
 			return nil, err
 		}
 		if n == 0 {
-			// The v1 successor did not land in `decisions` (it was a fact or an
-			// event, so it is a note now). `superseded` requires a decision to
-			// point at, so the row stays `rejected` — §D9's documented disposal
-			// state for a v1 archive with no usable successor.
+			// The successor was skipped after all (e.g. untitled). §D9's other
+			// branch applies: rejected, the disposal state for a v1 archive
+			// with no usable successor. proposed→rejected is a legal
+			// transition, so the status guard still holds.
+			if _, err := tx.Exec(`
+				UPDATE decisions SET status = 'rejected', status_changed_at = ? WHERE id = ?`,
+				fmtTime(now), id); err != nil {
+				return nil, fmt.Errorf("rejecting migrated decision %s: %w", id, err)
+			}
 			continue
 		}
-		now := time.Now().UTC()
 		if _, err := tx.Exec(`
 			UPDATE decisions
 			   SET status = 'superseded', superseded_by = ?, status_changed_at = ?
 			 WHERE id = ?`, successor, fmtTime(now), id); err != nil {
 			return nil, fmt.Errorf("superseding migrated decision %s: %w", id, err)
 		}
+	}
+
+	// No row may be left in the staging status by accident. This is cheap and
+	// it is the invariant F3 broke.
+	var staged int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM decisions
+		 WHERE status = 'proposed' AND id IN (SELECT value FROM json_each(?))`,
+		mustJSON(mapKeys(supersessions))).Scan(&staged); err != nil {
+		return nil, err
+	}
+	if staged != 0 {
+		return nil, fmt.Errorf(
+			"aborting: %d archived v1 decisions were left in the `proposed` staging status; "+
+				"the v1 backup at %s is intact", staged, opts.BackupPath)
 	}
 
 	if projectID == "" {
@@ -368,10 +405,45 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 		return nil, err
 	}
 
+	// §D9 step 5, and falsifier 5: "any count mismatch between v1 export and v2
+	// reimport". Counted against the destination tables, inside the transaction
+	// and before commit — comparing the migration's own counters against each
+	// other, which is what this check used to do, is arithmetically incapable
+	// of failing and is worse than no check at all.
+	var gotDecisions, gotNotes int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM decisions`).Scan(&gotDecisions); err != nil {
+		return nil, err
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&gotNotes); err != nil {
+		return nil, err
+	}
+	if want := report.Exported - len(report.Skipped); gotDecisions+gotNotes != want {
+		return nil, fmt.Errorf(
+			"aborting: the v2 database holds %d decisions + %d notes = %d, but %d rows were "+
+				"exported and %d skipped (expected %d); nothing was committed and the v1 backup "+
+				"at %s is intact",
+			gotDecisions, gotNotes, gotDecisions+gotNotes,
+			report.Exported, len(report.Skipped), want, opts.BackupPath)
+	}
+	if gotDecisions != report.Decisions || gotNotes != report.Notes {
+		return nil, fmt.Errorf(
+			"aborting: the report claims %d decisions and %d notes but the database holds "+
+				"%d and %d; the v1 backup at %s is intact",
+			report.Decisions, report.Notes, gotDecisions, gotNotes, opts.BackupPath)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return report, nil
+}
+
+func mapKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // insertMigratedDecision writes one v1 decision/convention row. It returns the
@@ -379,7 +451,7 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 // be represented in v2.
 func insertMigratedDecision(
 	tx *sql.Tx, m *types.Memory, storedEmbedding string,
-	supersessions map[string]string, report *MigrationReport,
+	willBeDecision map[string]bool, supersessions map[string]string, report *MigrationReport,
 ) (int, *SkippedRow, error) {
 	title := strings.TrimSpace(m.Summary)
 	if title == "" {
@@ -410,7 +482,11 @@ func insertMigratedDecision(
 		status = types.StatusProposed
 		report.NeedsTriage = append(report.NeedsTriage, m.ID)
 	case types.MemoryStatusArchived:
-		if m.SupersededBy != "" {
+		// §D9: `superseded_by` set in v1 → superseded; else → rejected. A
+		// successor that becomes a *note* cannot be pointed at (the FK and the
+		// superseded CHECK both need a decision), so it takes the else branch
+		// rather than the staging path.
+		if m.SupersededBy != "" && willBeDecision[m.SupersededBy] {
 			status = types.StatusProposed // upgraded to superseded in pass two
 			supersessions[m.ID] = m.SupersededBy
 		} else {
