@@ -249,3 +249,98 @@ func TestMigrateFromV1_IsGatedOnTheReadPaths(t *testing.T) {
 		t.Error("a gated conversion must not touch anything")
 	}
 }
+
+// Migration 3 (ADR-0001 Amendment 1) must lift interim pending keys out of the
+// decision.proposed payloads that carried them before the column existed.
+func TestMigration3_BackfillsPendingTopicKeyFromEventPayloads(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "interim.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Build a database at version 2 only — the state the interim carrier
+	// shipped in.
+	if _, err := db.Exec(migrationsTableSQL); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:2] {
+		if err := applyOne(db, m); err != nil {
+			t.Fatalf("migration %d: %v", m.version, err)
+		}
+	}
+	if ok, _ := columnExists(db, "decisions", "pending_topic_key"); ok {
+		t.Fatal("pending_topic_key must arrive in migration 3, not the D8 baseline")
+	}
+
+	now := "2026-07-28T00:00:00Z"
+	rows := []struct{ id, status, topicKey, payload string }{
+		// Proposed, no key of its own, payload claims one -> backfilled.
+		{"d1", "proposed", "", `{"via":"mcp","topic_key":"auth"}`},
+		// Proposed, already holds its key -> left alone.
+		{"d2", "proposed", "billing", `{"via":"cli","topic_key":"billing"}`},
+		// Proposed, payload claims nothing -> stays NULL.
+		{"d3", "proposed", "", `{"via":"cli"}`},
+		// Not proposed -> out of scope for the backfill.
+		{"d4", "rejected", "", `{"via":"mcp","topic_key":"stale"}`},
+	}
+	for _, r := range rows {
+		if _, err := db.Exec(`
+			INSERT INTO decisions (id, project_id, title, status, topic_key,
+			    created_at, updated_at, status_changed_at)
+			VALUES (?, 'p1', 'a title', ?, ?, ?, ?, ?)`,
+			r.id, r.status, nullableString(r.topicKey), now, now, now); err != nil {
+			t.Fatalf("seeding %s: %v", r.id, err)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO events (id, project_id, ts, kind, actor, decision_id, payload)
+			VALUES (?, 'p1', ?, 'decision.proposed', 'agent', ?, ?)`,
+			"ev-"+r.id, now, r.id, r.payload); err != nil {
+			t.Fatalf("seeding event for %s: %v", r.id, err)
+		}
+	}
+
+	if err := ApplySchema(db); err != nil {
+		t.Fatalf("upgrading to migration 3: %v", err)
+	}
+	if v, _ := currentVersion(db); v != LatestSchemaVersion() {
+		t.Fatalf("version = %d, want %d", v, LatestSchemaVersion())
+	}
+
+	want := map[string]string{"d1": "auth", "d2": "", "d3": "", "d4": ""}
+	for id, wantPending := range want {
+		var pending sql.NullString
+		if err := db.QueryRow(
+			`SELECT pending_topic_key FROM decisions WHERE id = ?`, id).Scan(&pending); err != nil {
+			t.Fatal(err)
+		}
+		if pending.String != wantPending {
+			t.Errorf("%s pending_topic_key = %q, want %q", id, pending.String, wantPending)
+		}
+	}
+	// d2 keeps its real key; the backfill must not disturb it.
+	var topic sql.NullString
+	db.QueryRow(`SELECT topic_key FROM decisions WHERE id = 'd2'`).Scan(&topic)
+	if topic.String != "billing" {
+		t.Errorf("d2 topic_key = %q, want billing", topic.String)
+	}
+
+	// The supporting index exists and is deliberately NOT unique — competing
+	// proposals may pend the same key.
+	var unique int
+	if err := db.QueryRow(`
+		SELECT "unique" FROM pragma_index_list('decisions')
+		 WHERE name = 'idx_decisions_pending_topic'`).Scan(&unique); err != nil {
+		t.Fatalf("idx_decisions_pending_topic missing: %v", err)
+	}
+	if unique != 0 {
+		t.Error("idx_decisions_pending_topic must be non-unique by design")
+	}
+}
+
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	var n int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n)
+	return n > 0, err
+}

@@ -63,6 +63,21 @@ func appendEvent(tx *sql.Tx, in EventInput) (string, error) {
 // (decision.expired, diff.observed, diff.scope_match) and reports whether the
 // row was new. A duplicate is not an error — it is the idempotency the index
 // exists to provide.
+//
+// Two consequences are deliberate, both dispositioned in ADR-0001 Amendment 1's
+// same-class audit, and both must be respected by the components that land on
+// top of this (the packer, the observer, the linter):
+//
+//   - decision.expired marks *first* expiry only. `expires_at` may be extended
+//     and the decision may expire again; no second event is possible. Read
+//     current expiry from the predicate, never from the event.
+//   - diff.scope_match verdicts freeze at first observation. A commit scanned
+//     as `conform` can become a `violate` under D6 if the commit it reverts is
+//     attached as evidence later, but the (decision_id, commit_sha) index keeps
+//     the first verdict. That is the intended trade: rescans stay idempotent
+//     and verdicts stay stable, because a verdict that flips retroactively
+//     costs more trust than one that is occasionally stale. The linter may
+//     flag the discrepancy; it must never rewrite the event.
 func appendEventOnce(tx *sql.Tx, in EventInput) (id string, inserted bool, err error) {
 	id, args, err := eventArgs(in)
 	if err != nil {

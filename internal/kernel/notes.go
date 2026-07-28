@@ -153,6 +153,51 @@ func (s *NoteStore) List(f NoteFilter) ([]types.Note, error) {
 	return out, rows.Err()
 }
 
+// SetStatus changes a note's status, enforcing the one rule notes have.
+//
+// idx_notes_topic_key is unique among *active* notes only. A stale or archived
+// note holds no key, so an active note may have taken it in the meantime;
+// reactivating the old one would then collide with the index. The kernel
+// rejects that with types.ErrNoteTopicKeyHeld naming the holder, rather than
+// letting a raw constraint abort surface (ADR-0001 Amendment 1, same-class
+// audit item 3 — the mirror of ErrTopicKeyHeld for decisions).
+func (s *NoteStore) SetStatus(id string, status types.MemoryStatus) error {
+	switch status {
+	case types.MemoryStatusActive, types.MemoryStatusStale, types.MemoryStatusArchived:
+	default:
+		return &types.ValidationError{Field: "status", Message: "must be active, stale or archived"}
+	}
+
+	n, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if n.Status == status {
+		return nil
+	}
+
+	if status == types.MemoryStatusActive && n.TopicKey != "" {
+		var holderID string
+		err := s.db.QueryRow(`
+			SELECT id FROM notes
+			 WHERE project_id = ? AND topic_key = ? AND status = 'active' AND id <> ?`,
+			n.ProjectID, n.TopicKey, n.ID).Scan(&holderID)
+		switch {
+		case err == nil:
+			return &types.NoteTopicKeyHeldError{TopicKey: n.TopicKey, HolderID: holderID}
+		case errors.Is(err, sql.ErrNoRows):
+		default:
+			return fmt.Errorf("checking note topic_key: %w", err)
+		}
+	}
+
+	if _, err := s.db.Exec(`UPDATE notes SET status = ?, updated_at = ? WHERE id = ?`,
+		string(status), fmtTime(time.Now().UTC()), id); err != nil {
+		return fmt.Errorf("updating note status: %w", err)
+	}
+	return nil
+}
+
 // Count returns the number of notes matching the filter.
 func (s *NoteStore) Count(f NoteFilter) (int, error) {
 	list, err := s.List(f)

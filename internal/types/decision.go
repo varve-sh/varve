@@ -85,11 +85,16 @@ type Decision struct {
 	Model     string `json:"model,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
-	TopicKey     string     `json:"topic_key,omitempty"`
-	Tags         []string   `json:"tags"`
-	Supersedes   []string   `json:"supersedes"`
-	SupersededBy string     `json:"superseded_by,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	TopicKey  string     `json:"topic_key,omitempty"`
+	// PendingTopicKey is the topic_key a proposed successor claims but cannot
+	// hold yet, because a non-terminal predecessor still holds it. It transfers
+	// to TopicKey in the acceptance transaction (ADR-0001 Amendment 1). Never
+	// set at the same time as TopicKey.
+	PendingTopicKey string   `json:"pending_topic_key,omitempty"`
+	Tags            []string `json:"tags"`
+	Supersedes      []string `json:"supersedes"`
+	SupersededBy    string   `json:"superseded_by,omitempty"`
 
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`

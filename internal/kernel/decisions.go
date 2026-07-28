@@ -34,7 +34,7 @@ func (s *DecisionStore) DB() *sql.DB { return s.db }
 const decisionColumns = `id, project_id, kind, title, body, status, scope, confidence,
 	source, source_ref, agent, model, session_id, expires_at, topic_key, tags,
 	supersedes, superseded_by, embedding, created_at, updated_at, decided_at,
-	status_changed_at, accessed_at, access_count`
+	status_changed_at, accessed_at, access_count, pending_topic_key`
 
 // DecisionInput is a new decision. Lifecycle fields are not settable by the
 // caller: birth state is determined by Source (D2).
@@ -210,16 +210,18 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 	// creates a proposed successor with `supersedes` pre-linked to the current
 	// non-terminal holder; acceptance completes the supersession (D5).
 	//
-	// NOTE — reconciled conflict inside D4, objection logged in
-	// planning/decisions-log.md (2026-07-28, "topic_key successor collides with
-	// its own uniqueness index"). D4 asks for a *proposed* successor while
-	// idx_decisions_topic_key is unique across `proposed`, `active` and
-	// `violated`: the successor row cannot carry the key while the predecessor
-	// still holds it. Both sentences hold only if the key transfers at
-	// acceptance, which is what "acceptance completes the supersession" means
-	// here. Implemented with the structures the ADR already provides: the
-	// pending key rides on the decision.proposed payload (a key D7 specifies)
-	// and acceptTx applies it to the row once the predecessors are terminal.
+	// The successor cannot carry the key at birth: idx_decisions_topic_key is
+	// unique across `proposed`, `active` and `violated`, and the predecessor is
+	// still holding it. It is born with `pending_topic_key` instead, and the
+	// key transfers in the acceptance transaction after the predecessors have
+	// gone terminal and freed it (ADR-0001 Amendment 1, D5).
+	//
+	// The carrier is a column, not the decision.proposed event payload: the
+	// payload made an append-only log row load-bearing *current state* — the
+	// snapshot/log inversion rejected alternative C was rejected for — and it
+	// contradicted D3's "while proposed, everything is editable in place",
+	// since append-only triggers would have frozen it. The payload key remains
+	// as an audit record of what was claimed, and nothing reads it.
 	pendingTopicKey := ""
 	if in.TopicKey != "" {
 		var holder string
@@ -267,6 +269,7 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 		SessionID:       in.SessionID,
 		ExpiresAt:       in.ExpiresAt,
 		TopicKey:        in.TopicKey,
+		PendingTopicKey: pendingTopicKey,
 		Tags:            in.Tags,
 		Supersedes:      in.Supersedes,
 		CreatedAt:       now,
@@ -276,13 +279,14 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 
 	if _, err := tx.Exec(`
 		INSERT INTO decisions (`+decisionColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		d.ID, d.ProjectID, string(d.Kind), d.Title, d.Body, string(d.Status),
 		mustJSON(d.Scope), d.Confidence, string(d.Source), nullableString(d.SourceRef),
 		nullableString(d.Agent), nullableString(d.Model), nullableString(d.SessionID),
 		nullableTime(d.ExpiresAt), nullableString(d.TopicKey), mustJSON(d.Tags),
 		mustJSON(d.Supersedes), nil, nil,
 		fmtTime(d.CreatedAt), fmtTime(d.UpdatedAt), nil, fmtTime(d.StatusChangedAt), nil, 0,
+		nullableString(d.PendingTopicKey),
 	); err != nil {
 		return nil, fmt.Errorf("inserting decision: %w", err)
 	}
@@ -460,36 +464,87 @@ func (s *DecisionStore) acceptTx(tx *sql.Tx, d *types.Decision, opts AcceptOptio
 	return applyPendingTopicKeyTx(tx, d)
 }
 
-// applyPendingTopicKeyTx transfers a topic_key that could not be written at
-// proposal time because the predecessor still held it. See the note in
-// proposeTx. Runs after the predecessors are terminal, so the partial unique
-// index is satisfied.
+// applyPendingTopicKeyTx is the final step of the acceptance transaction
+// (ADR-0001 Amendment 1, D5). The predecessors have just been superseded, so
+// the key they held is free; the successor claims it now.
+//
+// If some *other* non-terminal row still holds the key — a predecessor was
+// edited out of `supersedes` while proposed, a third row acquired the key in
+// the interim, or a competing pending successor was accepted first — the whole
+// acceptance fails with types.ErrTopicKeyHeld naming the holder. Nothing is
+// silently dropped: accepting the row without its claimed key would change
+// what the human saved. The partial unique index remains the backstop for any
+// writer that bypasses this check.
 func applyPendingTopicKeyTx(tx *sql.Tx, d *types.Decision) error {
-	if d.TopicKey != "" {
+	if d.PendingTopicKey == "" {
 		return nil
 	}
-	var payload string
+	key := d.PendingTopicKey
+
+	var holderID, holderStatus string
 	err := tx.QueryRow(`
-		SELECT payload FROM events
-		 WHERE decision_id = ? AND kind = 'decision.proposed'
-		 ORDER BY seq LIMIT 1`, d.ID).Scan(&payload)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		SELECT id, status FROM decisions
+		 WHERE project_id = ? AND topic_key = ? AND id <> ?
+		   AND status IN ('proposed','active','violated')`,
+		d.ProjectID, key, d.ID).Scan(&holderID, &holderStatus)
+	switch {
+	case err == nil:
+		return &types.TopicKeyHeldError{
+			TopicKey:     key,
+			HolderID:     holderID,
+			HolderStatus: types.DecisionStatus(holderStatus),
+		}
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return fmt.Errorf("checking topic_key %q: %w", key, err)
 	}
-	if err != nil {
-		return err
+
+	// topic_key and pending_topic_key are mutually exclusive; the swap is one
+	// statement so the pair is never both-set, not even mid-transaction.
+	if _, err := tx.Exec(
+		`UPDATE decisions SET topic_key = ?, pending_topic_key = NULL WHERE id = ?`,
+		key, d.ID); err != nil {
+		return fmt.Errorf("transferring topic_key %q: %w", key, err)
 	}
-	var p struct {
-		TopicKey string `json:"topic_key"`
-	}
-	if err := json.Unmarshal([]byte(payload), &p); err != nil || p.TopicKey == "" {
-		return nil
-	}
-	if _, err := tx.Exec(`UPDATE decisions SET topic_key = ? WHERE id = ?`, p.TopicKey, d.ID); err != nil {
-		return fmt.Errorf("transferring topic_key %q: %w", p.TopicKey, err)
-	}
-	d.TopicKey = p.TopicKey
+	d.TopicKey = key
+	d.PendingTopicKey = ""
 	return nil
+}
+
+// ClearPendingTopicKey drops a proposal's claimed topic_key. It is one of the
+// three recoveries from ErrTopicKeyHeld (the others: supersede the named
+// holder, or reject the proposal). Legal only while proposed — a pending key
+// is meaningless in any other state, and D3 makes everything editable in place
+// while proposed.
+func (s *DecisionStore) ClearPendingTopicKey(id string, actor types.Actor) error {
+	if actor == "" {
+		actor = types.ActorHuman
+	}
+	return s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if d.Status != types.StatusProposed {
+			return types.ErrDecisionImmutable
+		}
+		if d.PendingTopicKey == "" {
+			return nil
+		}
+		if _, err := tx.Exec(
+			`UPDATE decisions SET pending_topic_key = NULL, updated_at = ? WHERE id = ?`,
+			fmtTime(time.Now().UTC()), d.ID); err != nil {
+			return err
+		}
+		_, err = appendEvent(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventDecisionUpdated,
+			Actor:      actor,
+			DecisionID: d.ID,
+			Payload:    map[string]any{"fields": []string{"pending_topic_key"}},
+		})
+		return err
+	})
 }
 
 // Reject performs proposed→rejected: a human declining a proposal. The audit
@@ -605,10 +660,23 @@ func (s *DecisionStore) DismissViolation(id, violationEventID, reason string) er
 	})
 }
 
-// MarkExpired emits decision.expired the first time any component observes an
-// expired decision. Expiry is a derived predicate and changes no state (D2);
-// the event is idempotent by partial unique index. Reports whether the event
-// was new.
+// MarkExpired emits decision.expired the first time any component observes a
+// decision to be expired. Expiry is a derived predicate and changes no state
+// (D2). Reports whether the event was new.
+//
+// Two rules, both from ADR-0001 Amendment 1's same-class audit (item 1):
+//
+//   - The event marks *first* expiry only. `expires_at` can be extended and the
+//     decision can expire again, but idx_events_expired_once blocks a second
+//     event forever. Every consumer — packer, linter, reports — must therefore
+//     read current expiry from the predicate `expires_at < now`, never from
+//     this event.
+//   - Emission is INSERT OR IGNORE: two components observing the same expiry
+//     is normal, and the second write is a no-op rather than an error.
+//
+// The predicate is checked here rather than trusted from the caller: the event
+// is append-only and index-protected, so an event emitted for a decision that
+// has not expired yet can never be corrected.
 func (s *DecisionStore) MarkExpired(id string) (bool, error) {
 	var inserted bool
 	err := s.withTx(func(tx *sql.Tx) error {
@@ -616,7 +684,7 @@ func (s *DecisionStore) MarkExpired(id string) (bool, error) {
 		if err != nil {
 			return err
 		}
-		if d.ExpiresAt == nil {
+		if !d.IsExpired(time.Now().UTC()) {
 			return nil
 		}
 		_, ins, err := appendEventOnce(tx, EventInput{
@@ -1010,7 +1078,7 @@ func scanDecision(sc scanner) (*types.Decision, error) {
 		kind, status, source                         string
 		sourceRef, agent, model, sessionID           sql.NullString
 		expiresAt, topicKey, supersededBy, embedding sql.NullString
-		decidedAt, accessedAt                        sql.NullString
+		decidedAt, accessedAt, pendingTopicKey       sql.NullString
 		scopeJSON, tagsJSON, supersedesJSON          string
 		createdAt, updatedAt, statusChangedAt        string
 	)
@@ -1018,7 +1086,7 @@ func scanDecision(sc scanner) (*types.Decision, error) {
 		&d.ID, &d.ProjectID, &kind, &d.Title, &d.Body, &status, &scopeJSON, &d.Confidence,
 		&source, &sourceRef, &agent, &model, &sessionID, &expiresAt, &topicKey, &tagsJSON,
 		&supersedesJSON, &supersededBy, &embedding, &createdAt, &updatedAt, &decidedAt,
-		&statusChangedAt, &accessedAt, &d.AccessCount,
+		&statusChangedAt, &accessedAt, &d.AccessCount, &pendingTopicKey,
 	); err != nil {
 		return nil, err
 	}
@@ -1031,6 +1099,7 @@ func scanDecision(sc scanner) (*types.Decision, error) {
 	d.Model = model.String
 	d.SessionID = sessionID.String
 	d.TopicKey = topicKey.String
+	d.PendingTopicKey = pendingTopicKey.String
 	d.SupersededBy = supersededBy.String
 
 	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)

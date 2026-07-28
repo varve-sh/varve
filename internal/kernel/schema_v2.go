@@ -202,3 +202,43 @@ BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER events_append_only_d BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 `
+
+// schemaV3SQL is migration 3 — ADR-0001 Amendment 1. The §D8 baseline above is
+// deliberately not edited: applied migrations are frozen, and a new column
+// arrives through the framework like any other change.
+//
+// `pending_topic_key` holds the topic_key a proposed successor claims but
+// cannot yet hold, because a non-terminal predecessor still holds it. The key
+// transfers to `topic_key` as the final step of the acceptance transaction,
+// after the predecessors have been superseded and freed it (§D5, amended).
+//
+// The index is non-unique by design: competing proposals may legitimately pend
+// the same key. The partial unique index on `topic_key` is unchanged and stays
+// the backstop invariant.
+//
+// Mutual exclusion between `topic_key` and `pending_topic_key` is enforced in
+// the kernel — SQLite's ALTER TABLE ADD COLUMN cannot add a cross-column
+// CHECK, and rebuilding the table for one CHECK is not worth it.
+//
+// `pending_topic_key` is deliberately *not* added to decisions_content_freeze:
+// it is editable while proposed (§D3), and after acceptance it is NULL.
+const schemaV3SQL = `
+ALTER TABLE decisions ADD COLUMN pending_topic_key TEXT;
+
+-- Non-unique by design: competing proposals may pend the same key.
+CREATE INDEX idx_decisions_pending_topic
+    ON decisions(project_id, pending_topic_key)
+    WHERE pending_topic_key IS NOT NULL AND status = 'proposed';
+
+-- Backfill from the interim payload carrier, then nothing reads payloads.
+UPDATE decisions
+   SET pending_topic_key = (
+        SELECT json_extract(e.payload, '$.topic_key')
+          FROM events e
+         WHERE e.decision_id = decisions.id
+           AND e.kind = 'decision.proposed'
+         ORDER BY e.seq LIMIT 1)
+ WHERE status = 'proposed'
+   AND topic_key IS NULL
+   AND pending_topic_key IS NULL;
+`

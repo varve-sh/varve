@@ -517,7 +517,7 @@ func insertMigratedDecision(
 
 	if _, err := tx.Exec(`
 		INSERT INTO decisions (`+decisionColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.ID, m.ProjectID, string(kind), title, m.Content, string(status),
 		mustJSON(nonNilStrings(m.FilePaths)), m.Confidence, string(source),
 		nullableString(m.SourceRef), nil, nil, nil,
@@ -525,6 +525,7 @@ func insertMigratedDecision(
 		"[]", nil, embedding,
 		fmtTime(m.CreatedAt), fmtTime(m.UpdatedAt), decidedAt, fmtTime(m.UpdatedAt),
 		nullableTime(m.AccessedAt), m.AccessCount,
+		nil, // pending_topic_key: v1 has no deferred keys to carry
 	); err != nil {
 		return 0, nil, fmt.Errorf("inserting migrated decision %s: %w", m.ID, err)
 	}

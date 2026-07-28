@@ -28,6 +28,48 @@ var (
 	ErrMigrationNotReady = errors.New("the v1 to v2 conversion is not ready to run yet")
 )
 
+// ErrTopicKeyHeld is returned when a proposal's claimed topic_key is held by a
+// non-terminal decision the proposal does not supersede (ADR-0001 Amendment 1,
+// D5). The whole acceptance fails rather than silently dropping the key:
+// accepting the row without its claimed key would change what the human saved.
+var ErrTopicKeyHeld = errors.New("topic_key is held by another decision")
+
+// TopicKeyHeldError names the current holder so the caller can act on it.
+// Recovery is one explicit step: add the holder to `supersedes` and re-accept,
+// clear the pending key, or reject the proposal.
+type TopicKeyHeldError struct {
+	TopicKey string
+	HolderID string
+	// HolderStatus is the holder's lifecycle state, so the message can say
+	// whether it is a competing proposal or a live decision.
+	HolderStatus DecisionStatus
+}
+
+func (e *TopicKeyHeldError) Error() string {
+	return "topic_key " + e.TopicKey + " is already held by decision " + e.HolderID +
+		" (" + string(e.HolderStatus) + "); supersede it, clear the pending key, or reject this proposal"
+}
+
+func (e *TopicKeyHeldError) Unwrap() error { return ErrTopicKeyHeld }
+
+// ErrNoteTopicKeyHeld mirrors ErrTopicKeyHeld for notes: reactivating a
+// stale/archived note whose topic_key an active note has taken is rejected
+// (ADR-0001 Amendment 1, same-class audit item 3).
+var ErrNoteTopicKeyHeld = errors.New("note topic_key is held by an active note")
+
+// NoteTopicKeyHeldError names the active holder.
+type NoteTopicKeyHeldError struct {
+	TopicKey string
+	HolderID string
+}
+
+func (e *NoteTopicKeyHeldError) Error() string {
+	return "cannot reactivate: topic_key " + e.TopicKey +
+		" is held by active note " + e.HolderID
+}
+
+func (e *NoteTopicKeyHeldError) Unwrap() error { return ErrNoteTopicKeyHeld }
+
 // ValidationError wraps ErrValidation with field-level detail.
 type ValidationError struct {
 	Field   string
