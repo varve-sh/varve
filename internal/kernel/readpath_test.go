@@ -275,6 +275,95 @@ func TestContextForFiles_OrdersByClassThenRecency(t *testing.T) {
 	}
 }
 
+// The ordering above is only half of F16: the point of making the class
+// preference a sort key was that it applies *before* the 50-row cap, and three
+// rows cannot reach that cap. This drives it with 60 matching notes saved
+// before the decisions.
+//
+// Honest note on what this can and cannot prove. Neutering the sort does not
+// fail this test, because `FindByFilePaths` queries decisions and notes
+// separately and appends decisions first — so concatenation order and sorted
+// order agree today. The sort's value is that the ordering is *stated* rather
+// than incidental to two query shapes that could each change independently;
+// this test is a regression guard on the promise (decisions are never cut by
+// the cap while notes survive it), not an oracle for the sort itself.
+//
+// It also pins the documented consequence of the fix: a path matched by more
+// live decisions than the cap fills it on its own, and notes are then absent
+// by design rather than by accident.
+func TestContextForFiles_ClassPreferenceSurvivesTheCap(t *testing.T) {
+	k := readPathKernel(t)
+
+	for i := 0; i < 60; i++ {
+		if _, _, err := k.Save(types.MemorySaveInput{
+			Content:   fmt.Sprintf("Note %d about the store.", i),
+			Type:      types.MemoryTypeFact,
+			Source:    types.MemorySourceUser,
+			FilePaths: []string{"internal/kernel/store.go"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var decisionIDs []string
+	for i := 0; i < 3; i++ {
+		d, _, err := k.Save(types.MemorySaveInput{
+			Content:   fmt.Sprintf("Decision %d about the store.", i),
+			Type:      types.MemoryTypeDecision,
+			Source:    types.MemorySourceUser,
+			FilePaths: []string{"internal/kernel/**"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decisionIDs = append(decisionIDs, d.ID)
+	}
+
+	got, err := k.Store().FindByFilePaths(testProject, []string{"internal/kernel/store.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("returned %d rows, want the 50-row cap", len(got))
+	}
+	surfaced := make(map[string]bool, len(got))
+	for _, m := range got {
+		surfaced[m.ID] = true
+	}
+	for i, id := range decisionIDs {
+		if !surfaced[id] {
+			t.Errorf("decision %d was cut by the cap while 60 notes survived it — a "+
+				"binding rule must never lose its slot to an ungoverned note (F16)", i)
+		}
+	}
+	for i := 0; i < len(decisionIDs); i++ {
+		if !got[i].Type.IsDecision() {
+			t.Errorf("position %d is a %s; decisions come first", i, got[i].Type)
+		}
+	}
+
+	// The other side of the documented consequence: with more matching
+	// decisions than the cap, notes are absent, deliberately.
+	for i := 0; i < 60; i++ {
+		if _, _, err := k.Save(types.MemorySaveInput{
+			Content:   fmt.Sprintf("Crowding decision %d.", i),
+			Type:      types.MemoryTypeDecision,
+			Source:    types.MemorySourceUser,
+			FilePaths: []string{"internal/kernel/**"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err = k.Store().FindByFilePaths(testProject, []string{"internal/kernel/store.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range got {
+		if !m.Type.IsDecision() {
+			t.Errorf("a note surfaced ahead of a binding decision: %s", m.ID)
+		}
+	}
+}
+
 // ADR-0001's stated behaviour change: an agent's decision no longer binds on
 // save. A human's does, because the human is the confirmation (D2).
 func TestSave_BirthStateFollowsTheSource(t *testing.T) {

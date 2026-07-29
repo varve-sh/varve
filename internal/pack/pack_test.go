@@ -534,18 +534,80 @@ func TestBuild_DedupsNearDuplicateEmbeddings(t *testing.T) {
 
 // --- P12: determinism ---
 
-func TestBuild_IsByteIdenticalAcrossRuns(t *testing.T) {
+// buildDeterminismSource is the maximal fixture, extracted so a probe can
+// reuse it.
+func buildDeterminismSource() *fakeSource {
+	// The fixture is maximal on purpose. Determinism breaks through map
+	// iteration, and Go randomizes that per range — so a three-row fixture with
+	// no embeddings, no dedup, no omissions and no footer sections cannot
+	// produce the difference it is meant to detect. This one drives every
+	// map-ordered path: the embeddings map (semantic scores and §P5.4's
+	// near-duplicate sweep), the evidence and unresolved-count maps, and all
+	// three footer sections at once.
 	src := &fakeSource{
-		decisions: []types.Decision{
-			decision("01AAA", "First", withScope("internal/**")),
-			decision("01BBB", "Second", withScope("internal/auth/x.go")),
-		},
-		notes:      []types.Note{note("01NNN", "A note", "internal/auth/x.go")},
+		text:       map[string]float64{},
+		embeddings: map[string][]float64{},
 		unresolved: map[string]int{},
+		evidence:   map[string][]types.Evidence{},
 	}
-	req := Request{FilePaths: []string{"internal/auth/x.go"}, Task: "rotate tokens"}
-	first := build(t, src, req)
+	for i := 0; i < 30; i++ {
+		id := fmt.Sprintf("01DEC%021d", i)
+		d := decision(id, fmt.Sprintf("Decision %02d about the auth boundary", i),
+			withScope("internal/auth/**"))
+		d.Body = strings.Repeat("rationale ", 5+i*12) // a wide size range, so the ladder hits both stubs and omissions
+		d.Confidence = 0.5 + float64(i%5)/10          // ties in bunches, so the tiebreak runs
+		if i%7 == 0 {
+			d.Status = types.StatusViolated
+			src.unresolved[id] = i%3 + 1
+		}
+		src.decisions = append(src.decisions, d)
+		src.text[id] = -1.0 - float64(i%4)/10
+		// Near-orthogonal vectors: §P5.4's cosine sweep runs over all of them
+		// without collapsing the fixture into one deduped blob.
+		vec := make([]float64, 32)
+		vec[i%32] = 1
+		src.embeddings[id] = vec
+		src.evidence[id] = []types.Evidence{
+			{Kind: types.EvidenceKindCommit, Ref: fmt.Sprintf("sha%02d", i)},
+			{Kind: types.EvidenceKindPR, Ref: fmt.Sprintf("#%d", i)},
+		}
+	}
+	// Two exact-text twins, so §P5.4's dedup fires and the deduped footer line
+	// has content.
+	twin := decision("01TWIN0000000000000000000A", "A duplicated rule", withScope("internal/auth/**"))
+	twin.Body = "Exactly the same words."
+	twin2 := decision("01TWIN0000000000000000000B", "A  DUPLICATED   rule", withScope("internal/auth/**"))
+	twin2.Body = "Exactly   the same words."
+	src.decisions = append(src.decisions, twin, twin2)
 	for i := 0; i < 10; i++ {
+		src.notes = append(src.notes, note(fmt.Sprintf("01NOTE%020d", i),
+			fmt.Sprintf("Note %d about the session store", i), "internal/auth/session.go"))
+	}
+	for i := 0; i < 6; i++ {
+		src.proposed = append(src.proposed, decision(
+			fmt.Sprintf("01PROP%020d", i), fmt.Sprintf("Proposal %d", i),
+			withScope("internal/auth/**"), func(d *types.Decision) { d.Status = types.StatusProposed }))
+	}
+
+	return src
+}
+
+func TestBuild_IsByteIdenticalAcrossRuns(t *testing.T) {
+	src := buildDeterminismSource()
+
+	req := Request{
+		FilePaths:    []string{"internal/auth/session.go", "internal/auth/middleware.go"},
+		Task:         "rotate refresh tokens",
+		BudgetTokens: 1800, // small enough to force stubs, omissions and a truncated footer
+	}
+	first := build(t, src, req)
+	// The fixture has to actually exercise what it claims to.
+	if first.ItemCount == 0 || first.OmittedCount == 0 || first.DedupedCount == 0 ||
+		first.StubCount == 0 || first.ProposedMatched == 0 {
+		t.Fatalf("the determinism fixture does not reach every section: %+v", first)
+	}
+
+	for i := 0; i < 25; i++ {
 		// Same hour, different instants: §P12 truncates the clock to the hour.
 		r := req
 		r.Now = fixedNow.Add(time.Duration(i) * time.Minute)
@@ -553,9 +615,19 @@ func TestBuild_IsByteIdenticalAcrossRuns(t *testing.T) {
 		if got.Text != first.Text {
 			t.Fatalf("run %d differs:\n--- first ---\n%s\n--- got ---\n%s", i, first.Text, got.Text)
 		}
+		if len(got.Served) != len(first.Served) {
+			t.Fatalf("run %d served %d items, first served %d", i, len(got.Served), len(first.Served))
+		}
+		for j := range got.Served {
+			if got.Served[j] != first.Served[j] {
+				t.Fatalf("run %d item %d = %+v, first = %+v", i, j, got.Served[j], first.Served[j])
+			}
+		}
 	}
+
 	// Path order must not matter either.
-	shuffled := Request{FilePaths: []string{"internal/auth/x.go"}, Task: "rotate tokens"}
+	shuffled := req
+	shuffled.FilePaths = []string{"internal/auth/middleware.go", "internal/auth/session.go"}
 	if build(t, src, shuffled).Text != first.Text {
 		t.Error("path order changed the bytes")
 	}

@@ -174,10 +174,13 @@ func TestPack_EmitsPerItemEventsUnderTruncation(t *testing.T) {
 	k := packKernel(t)
 	k.BeginSession("mcp", "")
 
+	// A spread of body sizes, so the ladder reaches *both* rungs: uniformly
+	// huge bodies only ever produce omissions, and the point of this test is
+	// that a stubbed item still emits its pack.item.
 	for i := 0; i < 12; i++ {
 		acceptedDecision(t, k, fmt.Sprintf("Decision %02d", i), []string{"internal/**"},
 			func(in *DecisionInput) {
-				in.Body = strings.Repeat("A long rationale that will not fit. ", 30)
+				in.Body = strings.Repeat("A long rationale that will not fit. ", 2+i*8)
 			})
 	}
 
@@ -190,8 +193,9 @@ func TestPack_EmitsPerItemEventsUnderTruncation(t *testing.T) {
 	if !res.Truncated {
 		t.Fatalf("expected a truncated pack at this budget:\n%s", res.Text)
 	}
-	if res.StubCount == 0 && res.OmittedCount == 0 {
-		t.Fatal("expected stubs or omissions under budget pressure")
+	if res.StubCount == 0 || res.OmittedCount == 0 {
+		t.Fatalf("the fixture must reach both rungs of §P9's ladder: %d stubs, %d omitted",
+			res.StubCount, res.OmittedCount)
 	}
 	items, _ := k.Decisions().Events(EventFilter{Kind: types.EventPackItem})
 	if len(items) != res.ItemCount {
