@@ -379,15 +379,13 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 				limit = int(l)
 			}
 
-			results, err := k.ContextForFiles(filePaths, limit)
+			contextRes, err := k.ContextForFiles(filePaths, limit)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if len(results) == 0 {
+			if len(contextRes.Items) == 0 && len(contextRes.ProposedIDs) == 0 {
 				return mcp.NewToolResultText("No relevant memories found for these files."), nil
 			}
-			// (Proposals are filtered below, so a result set that is *only*
-			// proposals still reports them — as a count, never as content.)
 
 			var buf strings.Builder
 			fmt.Fprintf(&buf, "Context for %d file(s):\n", len(filePaths))
@@ -403,16 +401,12 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			// appears as content here, only as a footer count. An inline caveat
 			// inside content the agent was just handed is the precise laundering
 			// §P2's rationale names.
-			var proposedIDs []string
-			served := results[:0]
-			for _, r := range results {
-				if r.Memory.Status == types.MemoryStatus(types.StatusProposed) {
-					proposedIDs = append(proposedIDs, r.Memory.ID)
-					continue
-				}
-				served = append(served, r)
-			}
-			results = served
+			//
+			// The partition happens in the kernel, before the limit: filtering
+			// here let proposals take binding decisions' slots and then vanish
+			// (F32), and made the footer count report what survived a retrieval
+			// limit rather than what matched.
+			results := contextRes.Items
 
 			for i, r := range results {
 				m := r.Memory
@@ -432,7 +426,9 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 					buf.WriteString("\n\n")
 				}
 			}
-			if footer := pack.ProposedFooter(proposedIDs, 0); footer != "" {
+			// The count is always the true number of scope-matching proposals;
+			// only the id list is capped (§P8: ids may be dropped, counts never).
+			if footer := pack.ProposedFooter(contextRes.ProposedIDs, contextFooterIDs); footer != "" {
 				if len(results) > 0 {
 					buf.WriteString("\n")
 				}
@@ -532,6 +528,12 @@ func kernelPackRequest(args map[string]interface{}, task string) pack.Request {
 	}
 	return in
 }
+
+// contextFooterIDs caps how many proposal ids memory_context names. There is
+// no budget on this path to derive a reserve from, so the cap is fixed: enough
+// to act on, bounded so a large backlog cannot crowd out the content the tool
+// exists to deliver.
+const contextFooterIDs = 10
 
 // forgetResult says what actually happened, in the words the agent should
 // repeat to the user.

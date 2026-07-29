@@ -210,10 +210,11 @@ func TestContextForFiles_GlobMatchesDecisionScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := k.ContextForFiles([]string{"internal/kernel/store.go"}, 20)
+	ctxRes, err := k.ContextForFiles([]string{"internal/kernel/store.go"}, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
+	results := ctxRes.Items
 	found := map[string]bool{}
 	for _, r := range results {
 		found[r.Memory.ID] = true

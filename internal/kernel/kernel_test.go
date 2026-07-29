@@ -520,10 +520,11 @@ func TestFilePathsToQuery(t *testing.T) {
 
 func TestContextForFiles_Empty(t *testing.T) {
 	k := setupTestKernel(t)
-	results, err := k.ContextForFiles(nil, 10)
+	ctxRes, err := k.ContextForFiles(nil, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := ctxRes.Items
 	if len(results) != 0 {
 		t.Errorf("expected empty results for nil paths, got %d", len(results))
 	}
@@ -540,10 +541,11 @@ func TestContextForFiles_DirectMatch(t *testing.T) {
 		FilePaths: []string{"internal/db/store.go"},
 	})
 
-	results, err := k.ContextForFiles([]string{"src/auth/middleware.go"}, 10)
+	ctxRes, err := k.ContextForFiles([]string{"src/auth/middleware.go"}, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := ctxRes.Items
 	if len(results) == 0 {
 		t.Fatal("expected at least one result")
 	}
@@ -565,10 +567,11 @@ func TestContextForFiles_DeduplicatesAcrossSources(t *testing.T) {
 		Tags:      []string{"auth"},
 	})
 
-	results, err := k.ContextForFiles([]string{"src/auth/middleware.go"}, 10)
+	ctxRes, err := k.ContextForFiles([]string{"src/auth/middleware.go"}, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := ctxRes.Items
 	// Should appear exactly once despite matching both signals
 	count := 0
 	for _, r := range results {

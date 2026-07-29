@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1136,5 +1137,90 @@ func TestMemoryPack_ErrorsAreTypedAndRecordNothing(t *testing.T) {
 	}
 	if evs, _ := k.Decisions().Events(kernel.EventFilter{Kind: types.EventPackServed}); len(evs) != 0 {
 		t.Errorf("%d pack.served events from errored calls, want 0", len(evs))
+	}
+}
+
+// F32. The structural guarantee held, but the filter ran *after* the limit, so
+// proposals consumed result slots and then vanished — and proposals win
+// `updated_at DESC` by construction, so the better the quarantine worked the
+// less this tool returned. One binding decision behind twelve proposals came
+// back as no content at all, to the tool agents are told to call first.
+func TestMemoryContext_ProposalsDoNotCrowdOutBindingContent(t *testing.T) {
+	s, k := setupServer(t)
+
+	if _, err := k.Decisions().ProposeAccepted(kernel.DecisionInput{
+		ProjectID: "test-project",
+		Title:     "Handlers validate the auth header",
+		Scope:     []string{"internal/api/**"},
+		Source:    types.DecisionSourceUser,
+		Evidence: []kernel.EvidenceInput{{
+			Kind: types.EvidenceKindCommit, Ref: "9f2c1ab", AddedBy: types.ActorHuman,
+		}},
+	}, kernel.AcceptOptions{Actor: types.ActorHuman}); err != nil {
+		t.Fatal(err)
+	}
+	// The ordinary state of a store under the quarantine: proposals pile up,
+	// and they are the newest rows.
+	for i := 0; i < 12; i++ {
+		if _, _, err := k.Save(types.MemorySaveInput{
+			Content:   fmt.Sprintf("Proposal number %d about the API.", i),
+			Type:      types.MemoryTypeDecision,
+			Source:    types.MemorySourceAgent,
+			SessionID: "s1",
+			FilePaths: []string{"internal/api/**"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := resultText(t, callTool(t, s, "memory_context", map[string]interface{}{
+		"file_paths": []interface{}{"internal/api/users.go"},
+	}))
+
+	if !strings.Contains(out, "Handlers validate the auth header") {
+		t.Errorf("the binding decision was crowded out by quarantined rows:\n%s", out)
+	}
+	if strings.Contains(out, "Proposal number") {
+		t.Errorf("a proposal was served as content:\n%s", out)
+	}
+	// §P8: ids may be dropped, the count never may. Twelve matched.
+	if !strings.Contains(out, "proposed decisions touching these files: 12") {
+		t.Errorf("the footer count must be the true match count, not what survived "+
+			"a retrieval limit:\n%s", out)
+	}
+}
+
+// F33. memory_context's keyword half is not a recall the user ran. Emitting
+// recall.served for it put one row per context call into the arm ADR-0002 §P11
+// compares the packer against — with a machine-generated query, and the
+// keyword half's ids rather than what the tool served.
+func TestMemoryContext_DoesNotEmitRecallEvents(t *testing.T) {
+	s, k := setupServer(t)
+
+	if _, _, err := k.Save(types.MemorySaveInput{
+		Content: "The API package was split in March.", Type: types.MemoryTypeFact,
+		Source: types.MemorySourceUser, FilePaths: []string{"internal/api/users.go"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := resultText(t, callTool(t, s, "memory_context", map[string]interface{}{
+		"file_paths": []interface{}{"internal/api/users.go"},
+	}))
+	if !strings.Contains(out, "The API package was split in March.") {
+		t.Fatalf("the note should have surfaced; otherwise this proves nothing:\n%s", out)
+	}
+
+	recalls, _ := k.Decisions().Events(kernel.EventFilter{Kind: types.EventRecallServed})
+	if len(recalls) != 0 {
+		t.Errorf("%d recall.served events from a memory_context call — §P11's recall "+
+			"arm is contaminated with calls the user never made", len(recalls))
+	}
+
+	// An explicit recall still records one: this suppresses the internal
+	// caller, not the instrumentation.
+	callTool(t, s, "memory_recall", map[string]interface{}{"query": "api"})
+	recalls, _ = k.Decisions().Events(kernel.EventFilter{Kind: types.EventRecallServed})
+	if len(recalls) != 1 {
+		t.Errorf("recall.served events after an explicit recall = %d, want 1", len(recalls))
 	}
 }

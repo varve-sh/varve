@@ -427,6 +427,14 @@ func (k *MemoryKernel) CountByStatus() (map[string]int, error) { return k.store.
 
 // Recall searches memories using the retrieval pipeline, then updates access tracking.
 func (k *MemoryKernel) Recall(input types.MemoryRecallInput) ([]types.ScoredMemory, error) {
+	return k.recall(input, true)
+}
+
+// recall is Recall with the instrumentation switchable. Internal callers pass
+// false: an emitted `recall.served` claims the user ran a recall, and ADR-0002
+// §P11's whole purpose is comparing the two read paths against each other, so
+// a row the user never asked for is a row that biases the comparison (F33).
+func (k *MemoryKernel) recall(input types.MemoryRecallInput, emit bool) ([]types.ScoredMemory, error) {
 	if input.Limit <= 0 {
 		input.Limit = 10
 	}
@@ -461,12 +469,14 @@ func (k *MemoryKernel) Recall(input types.MemoryRecallInput) ([]types.ScoredMemo
 	// session_id is neither attributable nor identifiable as CLI; §P11's join
 	// walks recall.served → session window → diff.scope_match, and both ends of
 	// that walk need the id (ADR-0004 §D3).
-	sessionID, agent, model := k.sessionStamp()
-	if input.SessionID != "" {
-		sessionID = input.SessionID
+	if emit {
+		sessionID, agent, model := k.sessionStamp()
+		if input.SessionID != "" {
+			sessionID = input.SessionID
+		}
+		k.countSessionRecall()
+		_ = k.decisions.RecordRecall(k.projectID, input, ids, sessionID, agent, model)
 	}
-	k.countSessionRecall()
-	_ = k.decisions.RecordRecall(k.projectID, input, ids, sessionID, agent, model)
 
 	return results, nil
 }
@@ -614,9 +624,22 @@ func (k *MemoryKernel) ScanStaleness(projectRoot string) (ScanResult, error) {
 //
 // File-matched memories are returned first (score=1.0), followed by
 // keyword-matched memories not already in the file set.
-func (k *MemoryKernel) ContextForFiles(filePaths []string, limit int) ([]types.ScoredMemory, error) {
+// ContextResult is what memory_context volunteers: the items it may serve as
+// content, and — separately — every proposal that matched.
+//
+// The split is structural, not cosmetic (ADR-0002 Amendment 2). Proposals are
+// excluded from candidacy, not filtered out of a served list, and ProposedIDs
+// is the *complete* set of scope-matching proposals so §P8's rule holds: a
+// footer may drop ids, never the count.
+type ContextResult struct {
+	Items       []types.ScoredMemory
+	ProposedIDs []string
+}
+
+func (k *MemoryKernel) ContextForFiles(filePaths []string, limit int) (ContextResult, error) {
+	var out ContextResult
 	if len(filePaths) == 0 {
-		return nil, nil
+		return out, nil
 	}
 	if limit <= 0 {
 		limit = 10
@@ -628,22 +651,35 @@ func (k *MemoryKernel) ContextForFiles(filePaths []string, limit int) ([]types.S
 	// 1. Direct file match
 	byFile, err := k.store.FindByFilePaths(k.projectID, filePaths)
 	if err != nil {
-		return nil, fmt.Errorf("file match: %w", err)
+		return out, fmt.Errorf("file match: %w", err)
 	}
 
-	// 2. Keyword search inferred from file paths
+	// 2. Keyword search inferred from file paths.
+	//
+	// Uninstrumented on purpose: this is not a recall the user ran. Emitting
+	// `recall.served` here put one row per context call into the arm ADR-0002
+	// §P11 compares against the packer, with a machine-generated query and the
+	// keyword half's ids rather than what the tool served (F33).
 	query := filePathsToQuery(filePaths)
-	byQuery, err := k.Recall(types.MemoryRecallInput{
+	byQuery, err := k.recall(types.MemoryRecallInput{
 		Query: query,
 		Limit: limit * 2,
-	})
+	}, false)
 	if err != nil {
-		return nil, fmt.Errorf("keyword recall: %w", err)
+		return out, fmt.Errorf("keyword recall: %w", err)
 	}
 
-	// 3. Merge, deduplicating by ID. File-matched memories get score=1.0.
+	// 3. Merge, deduplicating by ID, partitioning proposals out **before** the
+	//    limit. Filtering them afterwards let them consume result slots and
+	//    then vanish: `FindByFilePaths` orders by recency and proposals are the
+	//    newest rows by construction, so the better the quarantine worked the
+	//    less this tool returned — one binding decision behind twelve proposals
+	//    came back as an empty pack of context (F32).
 	seen := make(map[string]bool, len(byFile)+len(byQuery))
 	results := make([]types.ScoredMemory, 0, limit)
+	proposed := func(m *types.Memory) bool {
+		return m.Type.IsDecision() && m.Status == types.MemoryStatus(types.StatusProposed)
+	}
 
 	for i := range byFile {
 		m := &byFile[i]
@@ -651,6 +687,10 @@ func (k *MemoryKernel) ContextForFiles(filePaths []string, limit int) ([]types.S
 			continue
 		}
 		seen[m.ID] = true
+		if proposed(m) {
+			out.ProposedIDs = append(out.ProposedIDs, m.ID)
+			continue
+		}
 		results = append(results, types.ScoredMemory{Memory: *m, Score: 1.0})
 	}
 	for _, r := range byQuery {
@@ -658,13 +698,18 @@ func (k *MemoryKernel) ContextForFiles(filePaths []string, limit int) ([]types.S
 			continue
 		}
 		seen[r.Memory.ID] = true
+		if proposed(&r.Memory) {
+			out.ProposedIDs = append(out.ProposedIDs, r.Memory.ID)
+			continue
+		}
 		results = append(results, r)
 	}
 
 	if len(results) > limit {
 		results = results[:limit]
 	}
-	return results, nil
+	out.Items = results
+	return out, nil
 }
 
 // filePathsToQuery extracts meaningful search terms from a list of file paths.
