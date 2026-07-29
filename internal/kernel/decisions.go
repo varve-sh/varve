@@ -811,20 +811,65 @@ func (s *DecisionStore) Reinstate(id string, opts ReinstateOptions) error {
 			}
 		}
 
-		if d.Status != types.StatusViolated {
-			return nil
+		// The revert.detected row is global by sha, and so is the resolution it
+		// provides: reverting X resolves *every* decision's episode on X. One
+		// commit violating two decisions is the ordinary case — a commit matches
+		// by glob and scopes overlap by design — so the zero-crossing has to be
+		// evaluated for every decision the revert touched, not only for the one
+		// the caller named. Otherwise the others sit `violated` forever with
+		// UnresolvedViolations == 0 and no reinstatement event, and §P8 renders
+		// "VIOLATED (0 unresolved)".
+		affected := []string{d.ID}
+		if opts.ViolatingSHA != "" {
+			rows, err := tx.Query(`
+				SELECT DISTINCT decision_id FROM events
+				 WHERE kind = 'decision.violated' AND commit_sha = ?
+				   AND decision_id IS NOT NULL AND decision_id <> ?`,
+				opts.ViolatingSHA, d.ID)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var other string
+				if err := rows.Scan(&other); err != nil {
+					rows.Close()
+					return err
+				}
+				affected = append(affected, other)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
 		}
-		unresolved, err := unresolvedViolationsTx(tx, d.ID)
-		if err != nil {
-			return err
+
+		for _, decisionID := range affected {
+			target := d
+			if decisionID != d.ID {
+				target, err = loadDecisionTx(tx, decisionID)
+				if err != nil {
+					return err
+				}
+			}
+			if target.Status != types.StatusViolated {
+				continue
+			}
+			unresolved, err := unresolvedViolationsTx(tx, target.ID)
+			if err != nil {
+				return err
+			}
+			if unresolved > 0 {
+				// Other episodes are still open: the decision stays violated and
+				// no reinstatement event is emitted. §P8's marker keeps counting.
+				continue
+			}
+			if err := applyTransitionTx(tx, target, types.StatusActive,
+				types.EventDecisionReinstated, types.ActorSystem,
+				map[string]any{"via": "counter_revert"}, opts.CommitSHA); err != nil {
+				return err
+			}
 		}
-		if unresolved > 0 {
-			// Other episodes are still open: the decision stays violated and no
-			// reinstatement event is emitted. §P8's marker keeps counting.
-			return nil
-		}
-		return applyTransitionTx(tx, d, types.StatusActive, types.EventDecisionReinstated,
-			types.ActorSystem, map[string]any{"via": "counter_revert"}, opts.CommitSHA)
+		return nil
 	})
 }
 

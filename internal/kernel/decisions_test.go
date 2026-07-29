@@ -1300,3 +1300,114 @@ func TestAccept_DoesNotReinstateAViolatedDecision(t *testing.T) {
 		t.Errorf("%d reinstatement events, want 0", len(evs))
 	}
 }
+
+// F21. One commit violating two decisions is the ordinary case: a commit
+// matches by glob and scopes overlap by design. The resolution a revert
+// provides is global by sha — reverting X resolves every decision's episode on
+// X — so the zero-crossing has to be evaluated for every decision the revert
+// touched. Evaluating it only for the decision the caller named left the
+// others `violated` forever with UnresolvedViolations == 0 and no
+// reinstatement event, which renders as "VIOLATED (0 unresolved)" in §P8.
+func TestReinstate_ZeroCrossesEveryDecisionTheRevertResolves(t *testing.T) {
+	s := newDecisionStore(t)
+
+	var ids []string
+	for _, title := range []string{"no JWT session state", "auth errors are wrapped"} {
+		in := baseInput()
+		in.Title = title
+		d, err := s.Propose(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		addCommitEvidence(t, s, d.ID, "sha-accept-"+title)
+		if _, err := s.Accept(d.ID, AcceptOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.MarkViolated(d.ID, ViolationOptions{
+			CommitSHA:    "abc",
+			Files:        []string{"internal/auth/session.go"},
+			MatchedGlobs: []string{"internal/**"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, d.ID)
+	}
+
+	// The observer reports the counter-revert against the first decision.
+	if err := s.Reinstate(ids[0], ReinstateOptions{
+		ViolatingSHA: "abc", CommitSHA: "def",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, id := range ids {
+		got, err := s.GetDecision(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != types.StatusActive {
+			t.Errorf("decision %d status = %s, want active — its only episode was "+
+				"resolved by the same revert", i, got.Status)
+		}
+		if n, _ := s.UnresolvedViolations(id); n != 0 {
+			t.Errorf("decision %d unresolved = %d, want 0", i, n)
+		}
+		if evs, _ := s.Events(EventFilter{
+			DecisionID: id, Kind: types.EventDecisionReinstated,
+		}); len(evs) != 1 {
+			t.Errorf("decision %d has %d reinstatement events, want 1 — a decision "+
+				"cannot be returned to active without the event that says so", i, len(evs))
+		}
+	}
+
+	// One observation, recorded once.
+	reverts, _ := s.Events(EventFilter{Kind: types.EventRevertDetected})
+	if len(reverts) != 1 {
+		t.Errorf("%d revert.detected events, want 1", len(reverts))
+	}
+}
+
+// The zero-crossing stays per decision: a decision with another open episode
+// is not dragged to active by someone else's revert.
+func TestReinstate_LeavesDecisionsWithOtherOpenEpisodesViolated(t *testing.T) {
+	s := newDecisionStore(t)
+
+	var ids []string
+	for i, title := range []string{"first", "second"} {
+		in := baseInput()
+		in.Title = title
+		d, _ := s.Propose(in)
+		addCommitEvidence(t, s, d.ID, "sha-accept-"+title)
+		s.Accept(d.ID, AcceptOptions{})
+		if _, err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "abc"}); err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 {
+			// The second decision is violated by a second, unreverted commit too.
+			if _, err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "xyz"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ids = append(ids, d.ID)
+	}
+
+	if err := s.Reinstate(ids[0], ReinstateOptions{ViolatingSHA: "abc", CommitSHA: "def"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := s.GetDecision(ids[0]); got.Status != types.StatusActive {
+		t.Errorf("first status = %s, want active", got.Status)
+	}
+	got, _ := s.GetDecision(ids[1])
+	if got.Status != types.StatusViolated {
+		t.Errorf("second status = %s, want violated — episode xyz is still open", got.Status)
+	}
+	if n, _ := s.UnresolvedViolations(ids[1]); n != 1 {
+		t.Errorf("second unresolved = %d, want 1", n)
+	}
+	if evs, _ := s.Events(EventFilter{
+		DecisionID: ids[1], Kind: types.EventDecisionReinstated,
+	}); len(evs) != 0 {
+		t.Errorf("second decision reinstated before its zero-crossing: %d events", len(evs))
+	}
+}
