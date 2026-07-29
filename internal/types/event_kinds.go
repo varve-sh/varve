@@ -62,6 +62,11 @@ const (
 	EventDiffScopeMatch  EventKind = "diff.scope_match"
 	EventRevertDetected  EventKind = "revert.detected"
 	EventMigrationDone   EventKind = "migration.completed"
+	// The importer and linter kinds (ADR-0005 §D6, folded into §D7 by
+	// ADR-0001 Amendment 6). Additive: §D8 has no kind CHECK, so no DDL.
+	EventImportCompleted EventKind = "import.completed"
+	EventImportUndone    EventKind = "import.undone"
+	EventLintCompleted   EventKind = "lint.completed"
 )
 
 // knownEventKinds is the validation set for the kernel's write path.
@@ -90,6 +95,9 @@ var knownEventKinds = map[EventKind]bool{
 	EventDiffScopeMatch:             true,
 	EventRevertDetected:             true,
 	EventMigrationDone:              true,
+	EventImportCompleted:            true,
+	EventImportUndone:               true,
+	EventLintCompleted:              true,
 }
 
 // NormativeDecisionFields is A2.1's normative-field set: an edit touching any
