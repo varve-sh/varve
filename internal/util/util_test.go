@@ -266,7 +266,6 @@ func TestEmbedConfig_RoundTrip(t *testing.T) {
 	}
 }
 
-
 // --- GenerateID ---
 
 func TestGenerateID_NonEmpty(t *testing.T) {

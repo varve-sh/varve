@@ -83,4 +83,3 @@ func isDecisionCommit(subject, body string) bool {
 	// Long body likely contains useful context
 	return len(body) > 100
 }
-
