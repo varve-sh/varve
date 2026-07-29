@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,22 @@ import (
 // what makes the batch reconstructible three ways (tag, event payload,
 // source_ref prefix).
 const ImportBatchTagPrefix = "varve-import:"
+
+// ImportIdentityTagPrefix carries a candidate's *rule identity* — an identity
+// that survives editing its text (F48).
+//
+// §D2.2's idempotency key is the content hash, which is right for "have I
+// imported this text before" and wrong for "did the human already say no to
+// this rule": editing one character produces a new source_ref, and §D2.4's
+// promise that an individually-rejected row is not resurrected would break on a
+// typo fix. The identity is coarser than the content hash and finer than the
+// file: for rules files it is the block's heading, so edits to a block's body
+// keep the rejection. Sources with stable row ids (claude-mem, engram) reuse
+// their source_ref, since editing upstream text there keeps the same row.
+//
+// The residual hole is disclosed rather than hidden: renaming a rejected rule's
+// *heading* does offer it again, and the import report says so.
+const ImportIdentityTagPrefix = "varve-rule:"
 
 // ImportCandidate is one row an importer proposes to create.
 //
@@ -40,6 +57,9 @@ type ImportCandidate struct {
 	FilePaths  []string
 	Tags       []string
 	Summary    string
+	// IdentityRef is the rule identity used for the never-resurrect rule
+	// (F48). Empty means "use SourceRef".
+	IdentityRef string
 	// Evidence is attached at birth for decision candidates: `import`-kind for
 	// most sources, `commit`-kind for the git miner (§D2.3). It makes
 	// proposed→active satisfiable without --force friction, and records where
@@ -96,7 +116,7 @@ func (k *MemoryKernel) ImportBatchInto(batchID, source string, candidates []Impo
 			res.Errors = append(res.Errors, "skipped an entry with no content")
 			continue
 		}
-		taken, err := k.sourceRefTaken(c.SourceRef)
+		taken, err := k.candidateTaken(c)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +185,7 @@ func (k *MemoryKernel) importDecision(c ImportCandidate, batchTag string) error 
 		Scope:     c.Scope,
 		Source:    types.DecisionSourceImport,
 		SourceRef: c.SourceRef,
-		Tags:      append(append([]string{}, c.Tags...), batchTag),
+		Tags:      append(append([]string{}, c.Tags...), batchTag, identityTag(c)),
 		Via:       "import",
 		Evidence:  []EvidenceInput{*ev},
 	})
@@ -188,6 +208,57 @@ func (k *MemoryKernel) importNote(c ImportCandidate, batchTag string) error {
 		Status:    types.MemoryStatusActive,
 	})
 	return err
+}
+
+// candidateTaken is the full skip test: §D2.2's source_ref rule, plus the
+// never-resurrect rule keyed on rule identity (F48). Either one skips.
+func (k *MemoryKernel) candidateTaken(c ImportCandidate) (bool, error) {
+	taken, err := k.sourceRefTaken(c.SourceRef)
+	if err != nil || taken {
+		return taken, err
+	}
+	if !c.AsDecision {
+		return false, nil
+	}
+	return k.rejectedByHumanIdentity(identityTag(c))
+}
+
+func identityTag(c ImportCandidate) string {
+	id := c.IdentityRef
+	if id == "" {
+		id = c.SourceRef
+	}
+	return ImportIdentityTagPrefix + id
+}
+
+// rejectedByHumanIdentity reports whether a human has already rejected a rule
+// with this identity. Undo-produced rejections do not count — those are the
+// import's own doing, and §D2.2's exception exists so re-import after undo
+// works.
+func (k *MemoryKernel) rejectedByHumanIdentity(tag string) (bool, error) {
+	rows, err := k.db.Query(`
+		SELECT id FROM decisions
+		 WHERE project_id = ? AND status = 'rejected'
+		   AND EXISTS (SELECT 1 FROM json_each(tags) t WHERE t.value = ?)`,
+		k.projectID, tag)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return false, err
+		}
+		undone, err := k.rejectedByUndo(id)
+		if err != nil {
+			return false, err
+		}
+		if !undone {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // sourceRefTaken is §D2.2's skip rule: a candidate is skipped iff a row with
@@ -278,7 +349,17 @@ type ImportUndoResult struct {
 	// LeftUntouched names rows a human already acted on. Undo never destroys a
 	// human's work — it reverses the import's influence, not their decisions.
 	LeftUntouched []string
+	// RedirectedFrom is set when a default (no-argument) undo skipped a batch
+	// that created nothing. ADR-0005 Amendment 1: the skip is legal but must be
+	// announced — a command that silently acts on a different batch than the
+	// one it just named is the kind of helpfulness that costs trust.
+	RedirectedFrom string
 }
+
+// ErrUnknownImportBatch is returned for a batch id with no `import.completed`
+// event. Refusing an unrecognised id is half of F45's fix: an undo that
+// accepts an arbitrary string will eventually be handed one.
+var ErrUnknownImportBatch = errors.New("no import batch with that id")
 
 // UndoImport reverses a batch's influence without violating append-only
 // (ADR-0005 §D2.4).
@@ -289,18 +370,39 @@ type ImportUndoResult struct {
 // has a `decision.proposed` event and the FK blocks it. "Reversible" therefore
 // means *no longer influences anything*: rejected rows are invisible to the
 // packer, to recall defaults and to attribution, with the audit record intact.
+//
+// Membership in a batch is decided from **import provenance**, never from the
+// batch tag alone (F45). The tag is user-writable, `memtrace export` preserves
+// it, and the documented export→import round trip therefore carries foreign
+// batch tags into other stores — so a tag-only membership test can be handed
+// rows the batch never created. A note is deleted only if it is tagged AND was
+// created by an import AND has not been edited since; anything else is spared
+// and listed. Notes carry no event log, so a wrong deletion here is
+// unrecoverable, which is why the note path gets the strictest test rather than
+// the loosest.
 func (k *MemoryKernel) UndoImport(batchID string) (*ImportUndoResult, error) {
+	res := &ImportUndoResult{}
 	if batchID == "" {
-		latest, err := k.LatestImportBatch()
+		latest, skipped, err := k.latestImportBatch()
 		if err != nil {
 			return nil, err
 		}
 		if latest == "" {
 			return nil, fmt.Errorf("no import batches to undo")
 		}
-		batchID = latest
+		batchID, res.RedirectedFrom = latest, skipped
+	} else {
+		// An explicitly named batch is always the target, even when it created
+		// nothing (Amendment 1: a stated no-op, never a redirect).
+		known, err := k.importBatchExists(batchID)
+		if err != nil {
+			return nil, err
+		}
+		if !known {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownImportBatch, batchID)
+		}
 	}
-	res := &ImportUndoResult{BatchID: batchID}
+	res.BatchID = batchID
 	tag := ImportBatchTagPrefix + batchID
 
 	notes, err := k.notes.List(NoteFilter{ProjectID: k.projectID})
@@ -309,6 +411,19 @@ func (k *MemoryKernel) UndoImport(batchID string) (*ImportUndoResult, error) {
 	}
 	for _, n := range notes {
 		if !hasTag(n.Tags, tag) {
+			continue
+		}
+		if n.Source != types.MemorySourceImport {
+			// Tagged, but not created by an import: someone else's row wearing
+			// this batch's label.
+			res.LeftUntouched = append(res.LeftUntouched, n.ID)
+			continue
+		}
+		if n.UpdatedAt.After(n.CreatedAt) {
+			// The human-action guard the decision path already had. "Undo never
+			// destroys a human's work" has to hold for the class that is hard
+			// deleted, or it does not hold.
+			res.LeftUntouched = append(res.LeftUntouched, n.ID)
 			continue
 		}
 		if _, err := k.store.DeleteByID(n.ID); err != nil {
@@ -389,25 +504,54 @@ func (k *MemoryKernel) recordImportUndone(res *ImportUndoResult) error {
 
 // LatestImportBatch returns the most recent batch that actually created rows,
 // or "" when there are none.
+func (k *MemoryKernel) LatestImportBatch() (string, error) {
+	batch, _, err := k.latestImportBatch()
+	return batch, err
+}
+
+// latestImportBatch also reports the batch it skipped, if any.
 //
 // The "created rows" filter is what makes `import undo` with no argument mean
 // what a user means by it. A re-run against unchanged sources is idempotent —
 // it creates nothing and emits an `import.completed` with all-skipped counts —
 // so without this filter the sequence the ADR advertises for a stranger
 // (import, read the report, undo) would undo an empty batch and leave the rows
-// in place. An empty batch has nothing to undo; the next one back does.
-func (k *MemoryKernel) LatestImportBatch() (string, error) {
-	var batch string
-	err := k.db.QueryRow(`
-		SELECT json_extract(payload, '$.batch') FROM events
-		 WHERE kind = 'import.completed'
-		   AND (json_extract(payload, '$.decisions') > 0
-		     OR json_extract(payload, '$.notes') > 0)
-		 ORDER BY seq DESC LIMIT 1`).Scan(&batch)
-	if err == sql.ErrNoRows {
-		return "", nil
+// in place. ADR-0005 Amendment 1 makes the skip legal *and* announced: the
+// skipped id is returned so the caller can print it, because a command that
+// quietly acts on a batch other than the newest one is unauditable.
+func (k *MemoryKernel) latestImportBatch() (batch, skipped string, err error) {
+	rows, qerr := k.db.Query(`
+		SELECT json_extract(payload, '$.batch'),
+		       json_extract(payload, '$.decisions') + json_extract(payload, '$.notes')
+		  FROM events WHERE kind = 'import.completed' ORDER BY seq DESC`)
+	if qerr != nil {
+		return "", "", qerr
 	}
-	return batch, err
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var created int
+		if err := rows.Scan(&id, &created); err != nil {
+			return "", "", err
+		}
+		if created > 0 {
+			return id, skipped, rows.Err()
+		}
+		if skipped == "" {
+			skipped = id
+		}
+	}
+	return "", skipped, rows.Err()
+}
+
+// importBatchExists reports whether a batch id was ever recorded.
+func (k *MemoryKernel) importBatchExists(batchID string) (bool, error) {
+	var n int
+	err := k.db.QueryRow(`
+		SELECT COUNT(*) FROM events
+		 WHERE kind = 'import.completed'
+		   AND json_extract(payload, '$.batch') = ?`, batchID).Scan(&n)
+	return n > 0, err
 }
 
 // RecordLintCompleted writes the linter's own event (§D6). It gives the funnel

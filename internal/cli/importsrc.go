@@ -27,7 +27,7 @@ type importFlags struct {
 
 func (f *importFlags) register(cmd *cobra.Command, withDB bool) {
 	cmd.Flags().BoolVar(&f.dryRun, "dry-run", false, "Preview, save nothing")
-	cmd.Flags().BoolVar(&f.yes, "yes", false, "Skip confirmation")
+	cmd.Flags().BoolVarP(&f.yes, "yes", "y", false, "Skip confirmation (required for non-interactive use)")
 	cmd.Flags().BoolVar(&f.asNotes, "as-notes", false,
 		"Demote all decision candidates to notes")
 	cmd.Flags().StringVar(&f.format, "format", "", "Report output: md, json (default: terminal text)")
@@ -132,14 +132,20 @@ you accept it, and --as-notes demotes the lot if you disagree.`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(),
-				"Undid batch %s: %d notes deleted, %d proposals rejected\n",
+			out := cmd.OutOrStdout()
+			if res.RedirectedFrom != "" {
+				// ADR-0005 Amendment 1: the empty-batch skip is announced, not
+				// silent. A command that acts on a batch other than the newest
+				// one has to say which.
+				fmt.Fprintf(out, "batch %s created nothing (all rows already present); undoing %s instead\n",
+					res.RedirectedFrom, res.BatchID)
+			}
+			fmt.Fprintf(out, "Undid batch %s: %d notes deleted, %d proposals rejected\n",
 				res.BatchID, res.NotesDeleted, res.DecisionsRejected)
 			if len(res.LeftUntouched) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(),
-					"Left untouched (you had already acted on these):\n")
+				fmt.Fprintf(out, "Left untouched (not created by this batch, or you had already acted on them):\n")
 				for _, id := range res.LeftUntouched {
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", id)
+					fmt.Fprintf(out, "  %s\n", id)
 				}
 			}
 			return nil
@@ -228,7 +234,7 @@ func toKernelCandidates(cands []importer.Candidate) []kernel.ImportCandidate {
 	out := make([]kernel.ImportCandidate, 0, len(cands))
 	for _, c := range cands {
 		kc := kernel.ImportCandidate{
-			SourceRef: c.SourceRef, AsDecision: c.AsDecision,
+			SourceRef: c.SourceRef, IdentityRef: c.IdentityRef, AsDecision: c.AsDecision,
 			Title: c.Title, Content: c.Content, Scope: c.Scope, Tags: c.Tags,
 		}
 		if c.AsDecision {
@@ -311,15 +317,35 @@ func findingCounts(res *lint.Result) map[string]int {
 	return counts
 }
 
+// confirm asks, but never blocks a non-interactive caller (F49).
+//
+// "import your store, read the report" is the sequence a design partner may run
+// from a script or a CI job — it is the sequence `init`'s probe advertises — so
+// a prompt with no non-interactive escape turns the funnel's first step into a
+// hang. With no terminal attached the answer is "no", stated, with the flag
+// that means yes.
 func confirm(cmd *cobra.Command, prompt string) bool {
+	out := cmd.OutOrStdout()
 	in := cmd.InOrStdin()
-	fmt.Fprint(cmd.OutOrStdout(), prompt)
+	if f, ok := in.(*os.File); ok && !isTerminal(f) {
+		fmt.Fprintln(out, "Not running interactively and --yes was not given; nothing was imported.")
+		return false
+	}
+	fmt.Fprint(out, prompt)
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil {
 		return false
 	}
 	line = strings.ToLower(strings.TrimSpace(line))
 	return line == "y" || line == "yes"
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 // ProbeAll lists what the known sources hold, without importing (§D2.1/§D2.6).

@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -266,5 +267,158 @@ func TestUndoImport_DefaultsToLatestBatch(t *testing.T) {
 	notes, _ := k.notes.List(NoteFilter{ProjectID: k.projectID})
 	if len(notes) != 1 || !strings.Contains(notes[0].Content, "first batch") {
 		t.Fatalf("undo touched the wrong batch: %+v", notes)
+	}
+}
+
+// F45: undo resolves membership from import provenance, not from the batch tag.
+// The tag is user-writable and `memtrace export` preserves it, so a store can
+// legitimately hold rows wearing another store's batch label.
+func TestUndoImport_SparesRowsItDidNotCreate(t *testing.T) {
+	k := setupTestKernel(t)
+	res, err := k.ImportBatch("engram", importFixture(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := ImportBatchTagPrefix + res.BatchID
+
+	// A note the user wrote themselves, carrying this batch's tag — the shape a
+	// round trip through `export` produces.
+	mine, err := k.notes.Insert(NoteInput{
+		ProjectID: k.projectID, Content: "An important note the user wants to keep",
+		Source: types.MemorySourceUser, Tags: []string{tag}, Status: types.MemoryStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An imported note the user has since edited.
+	notes, _ := k.notes.List(NoteFilter{ProjectID: k.projectID})
+	var edited string
+	for _, n := range notes {
+		if n.Source == types.MemorySourceImport {
+			edited = n.ID
+			break
+		}
+	}
+	if _, err := k.db.Exec(`UPDATE notes SET updated_at = ?, content = 'edited by hand'
+		 WHERE id = ?`, time.Now().UTC().Add(time.Minute).Format(time.RFC3339), edited); err != nil {
+		t.Fatal(err)
+	}
+
+	undo, err := k.UndoImport(res.BatchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if undo.NotesDeleted != 1 {
+		t.Fatalf("notes deleted = %d, want 1 (the untouched imported note only)", undo.NotesDeleted)
+	}
+	if got, err := k.notes.Get(mine.ID); err != nil || got == nil {
+		t.Fatalf("undo destroyed a note it did not create (%v)", err)
+	}
+	if got, err := k.notes.Get(edited); err != nil || got == nil {
+		t.Fatalf("undo hard-deleted an edited note (%v) — notes carry no audit record", err)
+	}
+	spared := map[string]bool{}
+	for _, id := range undo.LeftUntouched {
+		spared[id] = true
+	}
+	if !spared[mine.ID] || !spared[edited] {
+		t.Fatalf("spared rows were not listed: %v", undo.LeftUntouched)
+	}
+}
+
+// F45: an id that was never a batch is refused, rather than sweeping whatever
+// happens to carry the tag.
+func TestUndoImport_RefusesAnUnknownBatch(t *testing.T) {
+	k := setupTestKernel(t)
+	if _, err := k.ImportBatch("engram", importFixture(), false); err != nil {
+		t.Fatal(err)
+	}
+	_, err := k.UndoImport("01FAKEBATCH0000000000000000")
+	if !errors.Is(err, ErrUnknownImportBatch) {
+		t.Fatalf("undo of an unknown batch returned %v, want ErrUnknownImportBatch", err)
+	}
+	var n int
+	k.db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("the refused undo still deleted notes (%d left)", n)
+	}
+}
+
+// ADR-0005 Amendment 1: an explicitly named empty batch is a stated no-op,
+// never a redirect to a different batch.
+func TestUndoImport_NamedEmptyBatchIsANoOp(t *testing.T) {
+	k := setupTestKernel(t)
+	first, err := k.ImportBatch("engram", importFixture(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := k.ImportBatch("engram", importFixture(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	undo, err := k.UndoImport(empty.BatchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if undo.BatchID != empty.BatchID || undo.RedirectedFrom != "" {
+		t.Fatalf("named batch was redirected: %+v", undo)
+	}
+	if undo.NotesDeleted != 0 || undo.DecisionsRejected != 0 {
+		t.Fatalf("an empty batch undid rows: %+v", undo)
+	}
+	// …and the default undo still reaches the batch that created them, saying so.
+	undo, err = k.UndoImport("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if undo.BatchID != first.BatchID || undo.RedirectedFrom != empty.BatchID {
+		t.Fatalf("default undo = %+v, want %s with the skip announced", undo, first.BatchID)
+	}
+}
+
+// F48: the never-resurrect promise survives an edit to the rule's text.
+func TestReImport_DoesNotResurrectARejectedRuleAfterAnEdit(t *testing.T) {
+	k := setupTestKernel(t)
+	candidate := ImportCandidate{
+		SourceRef: "CLAUDE.md#aaaaaaaaaaaaaaaa", IdentityRef: "CLAUDE.md#title:security",
+		AsDecision: true, Kind: types.DecisionKindConvention,
+		Title: "Security", Content: "Never log secrets.",
+	}
+	if _, err := k.ImportBatch("CLAUDE.md", []ImportCandidate{candidate}, false); err != nil {
+		t.Fatal(err)
+	}
+	ds, _ := k.decisions.ListDecisions(DecisionFilter{ProjectID: k.projectID})
+	if err := k.decisions.Reject(ds[0].ID, "not our style", types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+
+	// The source text is edited by one character: a new content hash, the same
+	// rule.
+	edited := candidate
+	edited.SourceRef = "CLAUDE.md#bbbbbbbbbbbbbbbb"
+	edited.Content = "Never log secrets!"
+	res, err := k.ImportBatch("CLAUDE.md", []ImportCandidate{edited}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Decisions != 0 {
+		t.Fatalf("an edit resurrected a rule the human rejected: %+v", res)
+	}
+	if len(res.Skipped) != 1 {
+		t.Fatalf("the skip was not reported: %+v", res)
+	}
+
+	// A genuinely different rule from the same file still imports.
+	other := ImportCandidate{
+		SourceRef: "CLAUDE.md#cccccccccccccccc", IdentityRef: "CLAUDE.md#title:testing",
+		AsDecision: true, Kind: types.DecisionKindConvention,
+		Title: "Testing", Content: "Tests before features.",
+	}
+	res, err = k.ImportBatch("CLAUDE.md", []ImportCandidate{other}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Decisions != 1 {
+		t.Fatalf("identity suppression leaked to a different rule: %+v", res)
 	}
 }

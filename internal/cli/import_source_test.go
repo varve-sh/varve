@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/memtrace-dev/memtrace/internal/kernel"
 	"github.com/memtrace-dev/memtrace/internal/types"
@@ -192,5 +193,103 @@ func TestImportBare_ListsSourcesWithoutImporting(t *testing.T) {
 	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
 	if len(ds) != 0 {
 		t.Fatalf("probing imported %d rows — listing must never write", len(ds))
+	}
+}
+
+// F47, guarded against drift: the constant `init` actually writes must be the
+// one the importer skips. A test that hard-codes its own copy of the snippet
+// would keep passing after someone edits setup.go.
+func TestImportRules_SkipsVarvesOwnInstructionBlock(t *testing.T) {
+	k, root := setupProject(t)
+	writeRules(t, root, "CLAUDE.md", rulesBody+claudeMdSnippet)
+
+	out, err := runCmd(t, "import", "rules", "--yes")
+	if err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	ds, err := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ds) != 3 {
+		t.Fatalf("want the 3 project blocks, got %d", len(ds))
+	}
+	for _, d := range ds {
+		if strings.Contains(d.Body, "memory_recall") {
+			t.Fatalf("varve's own instruction block was proposed as a convention: %s", d.Title)
+		}
+	}
+}
+
+func TestImportUndo_UnknownBatchIsRefused(t *testing.T) {
+	k, root := setupProject(t)
+	writeRules(t, root, "CLAUDE.md", rulesBody)
+	if out, err := runCmd(t, "import", "rules", "--yes"); err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	out, err := runCmd(t, "import", "undo", "01FAKEBATCH0000000000000000")
+	if err == nil {
+		t.Fatalf("undo of an unknown batch succeeded:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "no import batch with that id") {
+		t.Errorf("error = %v", err)
+	}
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	for _, d := range ds {
+		if string(d.Status) != "proposed" {
+			t.Fatalf("the refused undo still moved %s to %s", d.ID, d.Status)
+		}
+	}
+}
+
+// Amendment 1: the empty-batch skip is announced.
+func TestImportUndo_AnnouncesTheSkippedBatch(t *testing.T) {
+	_, root := setupProject(t)
+	writeRules(t, root, "CLAUDE.md", rulesBody)
+	if out, err := runCmd(t, "import", "rules", "--yes"); err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	if out, err := runCmd(t, "import", "rules", "--yes"); err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	out, err := runCmd(t, "import", "undo")
+	if err != nil {
+		t.Fatalf("undo: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "created nothing (all rows already present); undoing") {
+		t.Errorf("the redirect was silent:\n%s", out)
+	}
+}
+
+// F49: with no terminal attached the prompt must not block, and must name the
+// flag that means yes.
+func TestImport_NonInteractiveDoesNotBlock(t *testing.T) {
+	k, root := setupProject(t)
+	writeRules(t, root, "CLAUDE.md", rulesBody)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close() // an *os.File that is not a terminal, like a CI job's stdin
+	defer r.Close()
+
+	done := make(chan struct{})
+	var out string
+	go func() {
+		defer close(done)
+		out, _ = runCmdWith(t, r, "import", "rules")
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("import blocked on stdin with no terminal attached")
+	}
+	if !strings.Contains(out, "--yes") {
+		t.Errorf("the non-interactive path does not name --yes:\n%s", out)
+	}
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	if len(ds) != 0 {
+		t.Fatalf("a declined import wrote %d rows", len(ds))
 	}
 }
