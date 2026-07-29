@@ -42,19 +42,45 @@ func setupV1Project(t *testing.T) (root string, ids []string) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for _, r := range []struct{ kind, content, summary string }{
-		{"decision", "Use ULIDs everywhere.", "Use ULIDs everywhere"},
-		{"convention", "Wrap errors with %w.", "Wrap errors"},
-		{"fact", "CI runs on arm64.", "CI is arm64"},
-	} {
+	// The fixture has to contain a row for every §D9 mapping that produces
+	// something other than an active decision, or the read-path visibility test
+	// cannot fail on any of them (F15 — this is the test that should have
+	// caught F12). Order matters: ids[0..1] are decisions, ids[2] is the note.
+	rows := []struct {
+		kind, content, summary, status, sourceRef, filePaths, supersededBy string
+	}{
+		{"decision", "Use ULIDs everywhere.", "Use ULIDs everywhere", "active",
+			"git:9f2c1ab", `["internal/util/ulid.go"]`, ""},
+		{"convention", "Wrap errors with %w.", "Wrap errors", "active", "", "[]", ""},
+		{"fact", "CI runs on arm64.", "CI is arm64", "active", "", "[]", ""},
+		// stale -> proposed: needs re-confirmation, and must be visible to a
+		// human who can act on it.
+		{"decision", "Cache TTL is five minutes.", "Cache TTL", "stale", "", "[]", ""},
+		// archived with no successor -> rejected (the documented widening).
+		{"decision", "Payloads are XML.", "XML payloads", "archived", "", "[]", ""},
+		// archived with a successor -> superseded. Filled in below, once the
+		// successor's id is known.
+		{"decision", "ULIDs only in the API.", "ULIDs in the API", "archived", "", "[]", "@0"},
+	}
+	for i, r := range rows {
 		id := util.GenerateID()
 		ids = append(ids, id)
+		supersededBy := any(nil)
+		if strings.HasPrefix(r.supersededBy, "@") {
+			supersededBy = ids[int(r.supersededBy[1]-'0')]
+		}
+		sourceRef := any(nil)
+		if r.sourceRef != "" {
+			sourceRef = r.sourceRef
+		}
 		if _, err := db.Exec(`
-			INSERT INTO memories (id, type, content, summary, source, confidence, project_id,
-			    file_paths, tags, status, created_at, updated_at, access_count)
-			VALUES (?, ?, ?, ?, 'user', 1.0, ?, '[]', '[]', 'active', ?, ?, 0)`,
-			id, r.kind, r.content, r.summary, cfg.Projects[root].ID, now, now); err != nil {
-			t.Fatal(err)
+			INSERT INTO memories (id, type, content, summary, source, source_ref, confidence,
+			    project_id, file_paths, tags, status, superseded_by, created_at, updated_at,
+			    access_count)
+			VALUES (?, ?, ?, ?, 'user', ?, 1.0, ?, ?, '[]', ?, ?, ?, ?, 0)`,
+			id, r.kind, r.content, r.summary, sourceRef, cfg.Projects[root].ID,
+			r.filePaths, r.status, supersededBy, now, now); err != nil {
+			t.Fatalf("seeding row %d: %v", i, err)
 		}
 	}
 	db.Close()
@@ -110,7 +136,7 @@ func TestMigrateCmd_FromV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate --from-v1: %v\noutput: %s", err, out)
 	}
-	for _, want := range []string{"exported   3", "decisions  2", "notes      1"} {
+	for _, want := range []string{"exported   6", "decisions  5", "notes      1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report missing %q, got:\n%s", want, out)
 		}
@@ -164,7 +190,7 @@ func TestMigrateCmd_RequiresTheFlag(t *testing.T) {
 // outcome. This asserts the outcome: every migrated row is visible through the
 // commands a user actually runs.
 func TestMigrateCmd_MigratedRowsAreVisibleToEveryReadPath(t *testing.T) {
-	setupV1Project(t)
+	root, ids := setupV1Project(t)
 
 	if out, err := runCmd(t, "migrate", "--from-v1"); err != nil {
 		t.Fatalf("migrate: %v\n%s", err, out)
@@ -206,6 +232,68 @@ func TestMigrateCmd_MigratedRowsAreVisibleToEveryReadPath(t *testing.T) {
 		if !strings.Contains(out, w) {
 			t.Errorf("`export` omitted %q", w)
 		}
+	}
+
+	// The mappings that produce something other than an active decision. A stale
+	// v1 decision comes over `proposed` and the migration report tells the user
+	// to re-confirm it — so it has to be visible to the commands that do that
+	// (F12/F15).
+	if out, err := runCmd(t, "list"); err != nil {
+		t.Fatalf("list: %v\n%s", err, out)
+	} else if !strings.Contains(out, "Cache TTL is five minutes.") {
+		t.Errorf("the stale v1 decision is invisible to `list` after migrating:\n%s", out)
+	}
+	if out, err := runCmd(t, "export"); err != nil {
+		t.Fatalf("export: %v\n%s", err, out)
+	} else if !strings.Contains(out, "Cache TTL is five minutes.") {
+		t.Errorf("`export` omitted the proposed decision")
+	}
+	if out, err := runCmd(t, "decision", "pending"); err != nil {
+		t.Fatalf("decision pending: %v\n%s", err, out)
+	} else if !strings.Contains(out, "Cache TTL") {
+		t.Errorf("the confirmation queue does not hold the re-confirmation the report asked for:\n%s", out)
+	}
+
+	// Terminal rows are correctly *not* live, but must be reachable by status.
+	for _, probe := range []struct{ status, content string }{
+		{"rejected", "Payloads are XML."},
+		{"superseded", "ULIDs only in the API."},
+	} {
+		out, err := runCmd(t, "list", "--status", probe.status)
+		if err != nil {
+			t.Fatalf("list --status %s: %v\n%s", probe.status, err, out)
+		}
+		if !strings.Contains(out, probe.content) {
+			t.Errorf("`list --status %s` does not show %q; got:\n%s", probe.status, probe.content, out)
+		}
+		if live, err := runCmd(t, "list"); err == nil && strings.Contains(live, probe.content) {
+			t.Errorf("a %s decision must not be live:\n%s", probe.status, live)
+		}
+	}
+
+	// source_ref -> accepting evidence, file_paths -> scope (D9's row mapping).
+	db, err := kernel.OpenDB(util.GetProjectDbPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := kernel.ApplySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	ds := kernel.NewDecisionStore(db)
+	d, err := ds.GetDecision(ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Scope) != 1 || d.Scope[0] != "internal/util/ulid.go" {
+		t.Errorf("scope = %v, want the v1 file_paths carried verbatim", d.Scope)
+	}
+	ev, err := ds.Evidence(ids[0])
+	if err != nil || len(ev) != 1 {
+		t.Fatalf("evidence = %d rows (%v), want 1 from source_ref", len(ev), err)
+	}
+	if ev[0].Kind != types.EvidenceKindCommit || ev[0].Ref != "9f2c1ab" || !ev[0].Accepting {
+		t.Errorf("evidence = %+v, want an accepting commit row for 9f2c1ab", ev[0])
 	}
 
 	out, err = runCmd(t, "status")
