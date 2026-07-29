@@ -325,3 +325,45 @@ CREATE INDEX idx_events_committed
     ON events(committed_at)
     WHERE kind = 'diff.observed' AND committed_at IS NOT NULL;
 `
+
+// schemaV6SQL is migration 6 — ADR-0001 Amendment 6 §A6.2's pre-registered
+// index, shipped because its trigger fired.
+//
+// A6.2 deferred this with an explicit condition: "iff idempotency checking for a
+// single import batch exceeds ~5 s at ~1,000 candidates on commodity hardware,
+// the index ships as the next migration, exactly as specified above, both
+// tables, one migration."
+//
+// Measured off the favourable diagonal (1,000 already-present candidates against
+// a 20,000-row store, so every candidate pays a full SELECT and no insert
+// amortises it): 2.8-3.1 s on an M4 Pro, 6.03 s on a GitHub ubuntu runner. The
+// runner is the commodity hardware the trigger names, and it is far closer to a
+// customer's machine than the founder's laptop — so the trigger fired on the
+// measurement that matters. Cost is linear in store rows, and the wave-1
+// importers (claude-mem corpora especially) bring exactly that volume.
+//
+// Non-unique by design: re-importing the same source_ref is a legitimate
+// duplicate the kernel resolves, not a constraint violation.
+//
+// DEVIATION from A6.2's written shape, logged for ratification: the index is
+// NOT partial. A6.2 specified `WHERE source IN ('import','git')` to keep it
+// free for hand-written rows, but SQLite can only choose a partial index when
+// the query provably restricts to its predicate, and the idempotency queries
+// filter on (project_id, source_ref) alone — deliberately, because §D2.2 asks
+// whether that source_ref exists in ANY status from ANY source. Shipped
+// partial, the index is never used: measured 2.69 s, and EXPLAIN QUERY PLAN
+// shows the planner falling back to idx_decisions_project_status. Non-partial
+// it is chosen, one of the two as a covering index: 8.5 ms, ~320x. Narrowing
+// the queries to fit the index instead would narrow the check's semantics to
+// fit its implementation, which is the wrong direction.
+//
+// This is A7.4's planner rule again — an index is incomplete without making the
+// planner able to choose it — with a predicate mismatch rather than missing
+// statistics as the reason. Pinned by a plan assertion, per that rule.
+const schemaV6SQL = `
+CREATE INDEX IF NOT EXISTS idx_decisions_source_ref
+    ON decisions(project_id, source_ref);
+
+CREATE INDEX IF NOT EXISTS idx_notes_source_ref
+    ON notes(project_id, source_ref);
+`

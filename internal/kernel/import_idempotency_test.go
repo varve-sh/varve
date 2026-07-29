@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,5 +109,46 @@ func TestImportIdempotency_CostPerThousandCandidates(t *testing.T) {
 		t.Errorf("idempotency checking took %v for %d candidates, past the %v trigger — "+
 			"ship the pre-written (project_id, source_ref) index as the next migration "+
 			"(ADR-0001 Amendment 6)", elapsed, n, idempotencyBudget)
+	}
+}
+
+// A7.4 made this normative for every index-adding migration: assert the plan,
+// against a realistically-sized store, never an empty one. Migration 6 exists
+// only to be chosen by these two queries, and the shape A6.2 specified was not
+// chosen at all — so the plan, not the clock, is what proves it works.
+func TestMigration6_IndexIsActuallyChosen(t *testing.T) {
+	k := New(filepath.Join(t.TempDir(), "plan.db"), "proj")
+	if err := k.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+
+	for _, tc := range []struct{ label, query, want string }{
+		{"notes source_ref lookup",
+			`SELECT COUNT(*) FROM notes WHERE project_id = ? AND source_ref = ?`,
+			"idx_notes_source_ref"},
+		{"decisions source_ref lookup",
+			`SELECT id, status FROM decisions WHERE project_id = ? AND source_ref = ?`,
+			"idx_decisions_source_ref"},
+	} {
+		rows, err := k.db.Query("EXPLAIN QUERY PLAN "+tc.query, "proj", "ref")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.label, err)
+		}
+		var plan string
+		for rows.Next() {
+			var a, b, c int
+			var detail string
+			if err := rows.Scan(&a, &b, &c, &detail); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			plan += detail + "\n"
+		}
+		rows.Close()
+		if !strings.Contains(plan, tc.want) {
+			t.Errorf("%s does not use %s — migration 6 is inert:\n%s",
+				tc.label, tc.want, plan)
+		}
 	}
 }
