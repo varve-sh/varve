@@ -268,3 +268,44 @@ func TestDecisionPromoteCmd_ProposesFromTheNoteAndKeepsItLive(t *testing.T) {
 		t.Errorf("note status = %v (%v), want archived by the acceptance", n.Status, err)
 	}
 }
+
+// F19 through the surface that reaches it: `decision accept` reads as
+// idempotent and printed "Accepted" a second time, which promoted evidence
+// attached after the acceptance.
+func TestDecisionAcceptCmd_RefusesToAcceptTwice(t *testing.T) {
+	k, _ := proposedProject(t)
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	id := ds[0].ID
+
+	if out, err := runCmd(t, "decision", "accept", id[:12], "--evidence", "commit:9f2c1ab"); err != nil {
+		t.Fatalf("accept: %v\n%s", err, out)
+	}
+	// A conforming commit attached weeks later.
+	if _, err := k.Decisions().AddEvidence(id, kernel.EvidenceInput{
+		Kind: types.EvidenceKindCommit, Ref: "deadbee", AddedBy: types.ActorHuman,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCmd(t, "decision", "accept", id[:12])
+	if err == nil {
+		t.Fatalf("a second accept must refuse, got: %s", out)
+	}
+	if !strings.Contains(err.Error(), "already active") {
+		t.Errorf("error = %v, want it to say the decision is already active", err)
+	}
+
+	ev, _ := k.Decisions().Evidence(id)
+	for _, e := range ev {
+		if e.Ref == "deadbee" && e.Accepting {
+			t.Fatal("the later commit became accepting evidence; a revert of it " +
+				"would now terminate the decision (§D6, item-6 ruling)")
+		}
+	}
+	accepted, _ := k.Decisions().Events(kernel.EventFilter{
+		DecisionID: id, Kind: types.EventDecisionAccepted,
+	})
+	if len(accepted) != 1 {
+		t.Errorf("%d decision.accepted events, want 1", len(accepted))
+	}
+}

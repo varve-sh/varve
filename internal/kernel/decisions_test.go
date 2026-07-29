@@ -1224,3 +1224,79 @@ func TestDismissViolation_ValidatesTheEpisode(t *testing.T) {
 		t.Errorf("%d dismissal events, want 1", len(evs))
 	}
 }
+
+// F19. §D4: evidence attached after acceptance "stays 0 and is immutable in
+// this respect (no retroactive promotion — the accepting set is a fact about
+// one moment)". A second Accept re-ran the acceptance transaction, including
+// the accepting-evidence UPDATE, so a later conforming commit became accepting
+// evidence — and a revert of it would then terminate the decision under §D6,
+// which is the exact fragility the founder's item-6 ruling exists to remove.
+func TestAccept_IsProposedOnlyAndNeverRepromotesEvidence(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, d.ID, "sha-accept")
+	if _, err := s.Accept(d.ID, AcceptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A later conforming commit, attached as evidence long after acceptance.
+	addCommitEvidence(t, s, d.ID, "sha-later")
+
+	if _, err := s.Accept(d.ID, AcceptOptions{}); !errors.Is(err, types.ErrIllegalTransition) {
+		t.Fatalf("re-accepting an active decision = %v, want ErrIllegalTransition", err)
+	}
+
+	ev, err := s.Evidence(d.ID)
+	if err != nil || len(ev) != 2 {
+		t.Fatalf("evidence = %d rows (%v), want 2", len(ev), err)
+	}
+	for _, e := range ev {
+		if e.Ref == "sha-later" && e.Accepting {
+			t.Error("evidence attached after acceptance was promoted to accepting")
+		}
+		if e.Ref == "sha-accept" && !e.Accepting {
+			t.Error("the evidence present at acceptance lost its accepting flag")
+		}
+	}
+	// The §D6 revert rule must not be able to reach this decision through the
+	// later commit.
+	ids, err := s.AcceptingCommitEvidence("sha-later")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("AcceptingCommitEvidence(sha-later) = %v; a revert of a later "+
+			"conforming commit would terminate the decision", ids)
+	}
+	// And the audit trail records one acceptance of a decision that can only be
+	// accepted once.
+	mustEvent(t, s, d.ID, types.EventDecisionAccepted)
+}
+
+// The same guard's second reach: Accept must not be a back door into the
+// violated→active edge, which belongs to dismissal and counter-revert (A2.2).
+func TestAccept_DoesNotReinstateAViolatedDecision(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, d.ID, "sha-accept")
+	s.Accept(d.ID, AcceptOptions{})
+	if _, err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "sha-bad"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Accept(d.ID, AcceptOptions{}); !errors.Is(err, types.ErrIllegalTransition) {
+		t.Fatalf("accepting a violated decision = %v, want ErrIllegalTransition", err)
+	}
+	got, _ := s.GetDecision(d.ID)
+	if got.Status != types.StatusViolated {
+		t.Errorf("status = %s, want violated — the episode is still unresolved", got.Status)
+	}
+	if n, _ := s.UnresolvedViolations(d.ID); n != 1 {
+		t.Errorf("unresolved = %d, want 1", n)
+	}
+	if evs, _ := s.Events(EventFilter{
+		DecisionID: d.ID, Kind: types.EventDecisionReinstated,
+	}); len(evs) != 0 {
+		t.Errorf("%d reinstatement events, want 0", len(evs))
+	}
+}

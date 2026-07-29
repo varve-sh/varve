@@ -393,8 +393,24 @@ func (s *DecisionStore) Accept(id string, opts AcceptOptions) (*types.Decision, 
 }
 
 func (s *DecisionStore) acceptTx(tx *sql.Tx, d *types.Decision, opts AcceptOptions) error {
-	if err := types.CheckTransition(d.Status, types.StatusActive); err != nil {
-		return err
+	// Acceptance is the proposed→active edge and nothing else. The general
+	// transition guard is not enough here for two reasons, both reachable:
+	//
+	//   - CanTransition(x, x) is true (a same-status call is a legal no-op for
+	//     `transition`), so a second Accept on an *active* decision would re-run
+	//     this whole transaction — including the accepting-evidence UPDATE. That
+	//     retroactively promotes evidence attached later via evidence.added,
+	//     which §D4 forbids in as many words ("rows attached later stay 0 and
+	//     are immutable in this respect — no retroactive promotion; the
+	//     accepting set is a fact about one moment"), and it re-arms exactly the
+	//     fragility the founder's item-6 ruling narrowed §D6 to remove: a revert
+	//     of a later conforming commit would then terminate the decision.
+	//   - CanTransition(violated, active) is true, because that edge exists for
+	//     dismissal and counter-revert. Reaching it through Accept would emit
+	//     decision.accepted instead of decision.reinstated and leave every
+	//     violation episode unresolved (A2.2). Reinstatement has its own API.
+	if d.Status != types.StatusProposed {
+		return &types.IllegalTransitionError{From: d.Status, To: types.StatusActive}
 	}
 	if opts.Actor == "" {
 		opts.Actor = types.ActorHuman

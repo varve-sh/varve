@@ -116,6 +116,22 @@ func newDecisionAcceptCmd() *cobra.Command {
 				return fmt.Errorf("%w\n  attach evidence with --evidence commit:<sha> (or pr/test/file/url/import), "+
 					"or accept unevidenced with --force", err)
 			}
+			var illegal *types.IllegalTransitionError
+			if errors.As(err, &illegal) {
+				// Acceptance is the proposed→active edge only. Re-accepting is not
+				// idempotent-and-harmless: it would re-promote evidence attached
+				// since (§D4), so it is refused with the reason (F19).
+				switch illegal.From {
+				case types.StatusActive:
+					return fmt.Errorf("decision %s is already active; it can only be accepted once, "+
+						"and re-accepting would promote evidence attached since to accepting evidence", id)
+				case types.StatusViolated:
+					return fmt.Errorf("decision %s is violated, and still binding; it returns to active "+
+						"when its violations are resolved, not by being accepted again", id)
+				default:
+					return fmt.Errorf("decision %s is %s — only a proposal can be accepted", id, illegal.From)
+				}
+			}
 			if err != nil {
 				return err
 			}
