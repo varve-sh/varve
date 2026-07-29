@@ -28,6 +28,18 @@ var (
 	ErrMigrationNotReady = errors.New("the v1 to v2 conversion is not ready to run yet")
 )
 
+// ErrUnknownViolationEpisode and ErrViolationAlreadyResolved gate
+// DismissViolation (ADR-0001 Amendment 2, A2.2). A violation episode is one
+// `decision.violated` event — one distinct violating commit — and the count of
+// *unresolved* episodes is what ADR-0002 §P8's "VIOLATED (n unresolved)"
+// marker and falsifier 2 read. A dangling or duplicated dismissal would
+// corrupt that arithmetic, so both are typed, actionable errors rather than
+// silent no-ops.
+var (
+	ErrUnknownViolationEpisode  = errors.New("no violation episode of this decision has that event id")
+	ErrViolationAlreadyResolved = errors.New("that violation episode is already resolved")
+)
+
 // ErrTopicKeyHeld is returned when a proposal's claimed topic_key is held by a
 // non-terminal decision the proposal does not supersede (ADR-0001 Amendment 1,
 // D5). The whole acceptance fails rather than silently dropping the key:

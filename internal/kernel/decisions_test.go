@@ -358,14 +358,14 @@ func TestViolationCycle(t *testing.T) {
 	addCommitEvidence(t, s, d.ID, "sha-accept")
 	s.Accept(d.ID, AcceptOptions{})
 
-	err := s.MarkViolated(d.ID, ViolationOptions{
+	recorded, err := s.MarkViolated(d.ID, ViolationOptions{
 		CommitSHA:    "sha-bad",
 		RevertedSHA:  "sha-accept",
 		Files:        []string{"internal/kernel/store.go"},
 		MatchedGlobs: []string{"internal/**"},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || !recorded {
+		t.Fatalf("MarkViolated = (%v, %v)", recorded, err)
 	}
 	got, _ := s.GetDecision(d.ID)
 	if got.Status != types.StatusViolated {
@@ -381,15 +381,24 @@ func TestViolationCycle(t *testing.T) {
 	if ev.Actor != types.ActorSystem {
 		t.Errorf("actor = %s, want system", ev.Actor)
 	}
+	// The observation and the governance fact are 1:1 by construction (A2.2).
+	matches, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDiffScopeMatch})
+	if len(matches) != 1 || matches[0].Payload["verdict"] != "violate" {
+		t.Fatalf("diff.scope_match = %+v, want one violate row", matches)
+	}
 
-	// A violated decision is still binding — no state change on re-detection,
-	// and no duplicate event.
-	if err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "sha-bad-2"}); err != nil {
-		t.Fatal(err)
+	// A rescan of the same (decision, commit) is a no-op on both rows: the
+	// unique index is the idempotency, and the frozen verdict stays frozen.
+	if recorded, err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "sha-bad"}); err != nil || recorded {
+		t.Fatalf("rescan recorded a second episode: (%v, %v)", recorded, err)
 	}
 	mustEvent(t, s, d.ID, types.EventDecisionViolated)
 
-	if err := s.Reinstate(d.ID, "sha-counter"); err != nil {
+	// Resolving the one open episode crosses zero, so the decision returns to
+	// active and decision.reinstated fires.
+	if err := s.Reinstate(d.ID, ReinstateOptions{
+		ViolatingSHA: "sha-bad", CommitSHA: "sha-counter",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.GetDecision(d.ID)
@@ -400,6 +409,9 @@ func TestViolationCycle(t *testing.T) {
 	if ev.Payload["via"] != "counter_revert" {
 		t.Errorf("via = %v, want counter_revert", ev.Payload["via"])
 	}
+	if n, _ := s.UnresolvedViolations(d.ID); n != 0 {
+		t.Errorf("unresolved = %d, want 0", n)
+	}
 }
 
 func TestDismissViolation_EmitsBothEventsAndReinstates(t *testing.T) {
@@ -407,7 +419,9 @@ func TestDismissViolation_EmitsBothEventsAndReinstates(t *testing.T) {
 	d, _ := s.Propose(baseInput())
 	addCommitEvidence(t, s, d.ID, "sha-accept")
 	s.Accept(d.ID, AcceptOptions{})
-	s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "sha-bad"})
+	if _, err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "sha-bad"}); err != nil {
+		t.Fatal(err)
+	}
 
 	violation := mustEvent(t, s, d.ID, types.EventDecisionViolated)
 	if err := s.DismissViolation(d.ID, violation.ID, "false_positive"); err != nil {
@@ -584,7 +598,7 @@ func TestTransition_EventAndStateChangeShareATransaction(t *testing.T) {
 	d, _ := s.Propose(baseInput())
 
 	// proposed -> violated is illegal; nothing may be written.
-	if err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "x"}); !errors.Is(err, types.ErrIllegalTransition) {
+	if _, err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "x"}); !errors.Is(err, types.ErrIllegalTransition) {
 		t.Fatalf("err = %v, want ErrIllegalTransition", err)
 	}
 	got, _ := s.GetDecision(d.ID)
@@ -989,7 +1003,7 @@ func TestMarkViolated_OmitsRevertedSHAWhenThereIsNone(t *testing.T) {
 	addCommitEvidence(t, s, d.ID, "sha-accept")
 	s.Accept(d.ID, AcceptOptions{})
 
-	if err := s.MarkViolated(d.ID, ViolationOptions{
+	if _, err := s.MarkViolated(d.ID, ViolationOptions{
 		CommitSHA: "sha-bad", Files: []string{"internal/x.go"}, MatchedGlobs: []string{"internal/**"},
 	}); err != nil {
 		t.Fatal(err)
@@ -1096,32 +1110,117 @@ func TestDecisionUpdated_NeverNamesANormativeField(t *testing.T) {
 	}
 }
 
-// D6's state effect is first-verdict-only, so a repeat violation changes
-// nothing and emits no lifecycle event. Pinned here explicitly because
-// ADR-0001 falsifier 2 counts decision.violated events against dismissals and
-// would otherwise read low without anyone knowing why: the record of record
-// for repeat violations is diff.scope_match(verdict=violate), which the
-// observer writes per (decision, commit).
-func TestMarkViolated_RepeatViolationsLeaveNoSecondLifecycleEvent(t *testing.T) {
+// A2.2: each violate verdict on a distinct commit is its own violation
+// episode, with its own decision.violated event, even while the decision is
+// already violated. Before the amendment this was a documented no-op, so a
+// decision violated fifty times counted once: falsifier 2 read low by
+// construction and ADR-0002 §P8's "VIOLATED (n unresolved)" marker could never
+// exceed 1.
+func TestMarkViolated_EachCommitIsItsOwnEpisode(t *testing.T) {
 	s := newDecisionStore(t)
 	d, _ := s.Propose(baseInput())
 	addCommitEvidence(t, s, d.ID, "sha-accept")
 	s.Accept(d.ID, AcceptOptions{})
 
-	for _, sha := range []string{"sha-bad-1", "sha-bad-2", "sha-bad-3"} {
-		if err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: sha}); err != nil {
-			t.Fatal(err)
+	shas := []string{"sha-bad-1", "sha-bad-2", "sha-bad-3"}
+	for _, sha := range shas {
+		recorded, err := s.MarkViolated(d.ID, ViolationOptions{CommitSHA: sha})
+		if err != nil || !recorded {
+			t.Fatalf("episode %s = (%v, %v)", sha, recorded, err)
 		}
 	}
 	evs, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDecisionViolated})
-	if len(evs) != 1 {
-		t.Errorf("%d decision.violated events, want 1 (first verdict only, D6)", len(evs))
+	if len(evs) != 3 {
+		t.Fatalf("%d decision.violated events, want one per violating commit", len(evs))
 	}
-	if evs[0].CommitSHA != "sha-bad-1" {
-		t.Errorf("the retained event should be the first: %q", evs[0].CommitSHA)
-	}
-	got, _ := s.GetDecision(d.ID)
-	if got.Status != types.StatusViolated {
+	// Exactly one state change, on the first.
+	if got, _ := s.GetDecision(d.ID); got.Status != types.StatusViolated {
 		t.Errorf("status = %s, want violated", got.Status)
+	}
+	if n, err := s.UnresolvedViolations(d.ID); err != nil || n != 3 {
+		t.Fatalf("unresolved = %d (%v), want 3", n, err)
+	}
+
+	// Resolution is per episode, and the decision stays violated until the
+	// unresolved count crosses zero.
+	if err := s.DismissViolation(d.ID, evs[0].ID, "false_positive"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetDecision(d.ID); got.Status != types.StatusViolated {
+		t.Errorf("status = %s after resolving 1 of 3, want violated", got.Status)
+	}
+	if reinstated, _ := s.Events(EventFilter{
+		DecisionID: d.ID, Kind: types.EventDecisionReinstated,
+	}); len(reinstated) != 0 {
+		t.Errorf("reinstatement fired before the zero-crossing: %d events", len(reinstated))
+	}
+
+	if err := s.Reinstate(d.ID, ReinstateOptions{
+		ViolatingSHA: "sha-bad-2", CommitSHA: "sha-counter",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetDecision(d.ID); got.Status != types.StatusViolated {
+		t.Errorf("status = %s after resolving 2 of 3, want violated", got.Status)
+	}
+
+	if err := s.DismissViolation(d.ID, evs[2].ID, "accepted_exception"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetDecision(d.ID); got.Status != types.StatusActive {
+		t.Errorf("status = %s at the zero-crossing, want active", got.Status)
+	}
+	mustEvent(t, s, d.ID, types.EventDecisionReinstated)
+	if n, _ := s.UnresolvedViolations(d.ID); n != 0 {
+		t.Errorf("unresolved = %d, want 0", n)
+	}
+}
+
+// A2.2's required validation: a dangling or duplicate dismissal would corrupt
+// the unresolved arithmetic §P8 and falsifier 2 read, so both are typed errors
+// and neither reinstates anything.
+func TestDismissViolation_ValidatesTheEpisode(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, d.ID, "sha-accept")
+	s.Accept(d.ID, AcceptOptions{})
+	s.MarkViolated(d.ID, ViolationOptions{CommitSHA: "sha-bad"})
+	episode := mustEvent(t, s, d.ID, types.EventDecisionViolated)
+
+	// An id that names no episode.
+	if err := s.DismissViolation(d.ID, "01NOTANEVENT", "false_positive"); !errors.Is(
+		err, types.ErrUnknownViolationEpisode) {
+		t.Errorf("err = %v, want ErrUnknownViolationEpisode", err)
+	}
+	// An episode of another decision.
+	other, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, other.ID, "sha-accept-2")
+	s.Accept(other.ID, AcceptOptions{})
+	if err := s.DismissViolation(other.ID, episode.ID, "false_positive"); !errors.Is(
+		err, types.ErrUnknownViolationEpisode) {
+		t.Errorf("foreign episode err = %v, want ErrUnknownViolationEpisode", err)
+	}
+	// The decision is still violated and nothing was written.
+	if got, _ := s.GetDecision(d.ID); got.Status != types.StatusViolated {
+		t.Errorf("status = %s, want violated", got.Status)
+	}
+	if evs, _ := s.Events(EventFilter{
+		DecisionID: d.ID, Kind: types.EventDecisionViolationDismissed,
+	}); len(evs) != 0 {
+		t.Errorf("%d dismissal events written by rejected calls, want 0", len(evs))
+	}
+
+	// The real dismissal works; the duplicate is refused.
+	if err := s.DismissViolation(d.ID, episode.ID, "false_positive"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DismissViolation(d.ID, episode.ID, "false_positive"); !errors.Is(
+		err, types.ErrViolationAlreadyResolved) {
+		t.Errorf("duplicate dismissal err = %v, want ErrViolationAlreadyResolved", err)
+	}
+	if evs, _ := s.Events(EventFilter{
+		DecisionID: d.ID, Kind: types.EventDecisionViolationDismissed,
+	}); len(evs) != 1 {
+		t.Errorf("%d dismissal events, want 1", len(evs))
 	}
 }

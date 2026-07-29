@@ -608,46 +608,234 @@ type ViolationOptions struct {
 	MatchedGlobs []string
 }
 
-// MarkViolated moves an active decision to `violated`. A violated decision is
-// still binding — a violation is a fact about the codebase, not a repeal (D2).
-// Marking an already-violated decision is a no-op that emits no second event.
-func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) error {
-	return s.transition(id, types.StatusViolated, types.EventDecisionViolated, types.ActorSystem,
-		func(d *types.Decision) map[string]any {
-			p := map[string]any{
+// MarkViolated records one violation episode: a `violate` verdict on a
+// distinct violating commit (ADR-0001 Amendment 2, A2.2).
+//
+// Every new episode emits its own decision.violated event, including when the
+// decision is *already* violated; the state transition happens only on the
+// first. Before the amendment a repeat violation was a documented no-op, so a
+// decision violated fifty times counted once — falsifier 2 read low by
+// construction, and ADR-0002 §P8's "VIOLATED (n unresolved)" marker could
+// never exceed 1.
+//
+// Idempotency comes from the schema, not from a status check: the episode's
+// diff.scope_match row is inserted in the same transaction, and
+// idx_events_scopematch_once makes a rescan of the same (decision, commit) a
+// no-op for both rows. That leaves the Amendment 1 verdict-freeze disposition
+// intact — freezing governs rescans of the same pair, never a new commit.
+//
+// Reports whether a new episode was recorded.
+func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) (bool, error) {
+	var recorded bool
+	err := s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		// A proposal is not binding and cannot be violated; a terminal row makes
+		// no further transitions. Checked against the matrix even when the
+		// decision is already violated, so the illegal cases stay illegal.
+		if d.Status != types.StatusViolated {
+			if err := types.CheckTransition(d.Status, types.StatusViolated); err != nil {
+				return err
+			}
+		}
+
+		// The observation. Its unique index is the episode's identity.
+		_, inserted, err := appendEventOnce(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventDiffScopeMatch,
+			Actor:      types.ActorSystem,
+			DecisionID: d.ID,
+			CommitSHA:  opts.CommitSHA,
+			Payload: map[string]any{
 				"files":         nonNilStrings(opts.Files),
 				"matched_globs": nonNilStrings(opts.MatchedGlobs),
-			}
-			// §D7 shows reverted_sha as a SHA. An empty string is a claim about
-			// a commit that does not exist, so the key is omitted when the
-			// verdict came from a scope match rather than a revert.
-			if opts.RevertedSHA != "" {
-				p["reverted_sha"] = opts.RevertedSHA
-			}
-			return p
-		}, opts.CommitSHA)
+				"verdict":       "violate",
+			},
+		})
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			return nil // already observed: rescans are no-ops
+		}
+		recorded = true
+
+		payload := map[string]any{
+			"files":         nonNilStrings(opts.Files),
+			"matched_globs": nonNilStrings(opts.MatchedGlobs),
+		}
+		// §D7 shows reverted_sha as a SHA. An empty string is a claim about a
+		// commit that does not exist, so the key is omitted when the verdict came
+		// from a scope match rather than a revert.
+		if opts.RevertedSHA != "" {
+			payload["reverted_sha"] = opts.RevertedSHA
+		}
+
+		if d.Status == types.StatusViolated {
+			// A further episode on an already-violated decision: the event, and
+			// no state change.
+			_, err := appendEvent(tx, EventInput{
+				ProjectID:  d.ProjectID,
+				Kind:       types.EventDecisionViolated,
+				Actor:      types.ActorSystem,
+				DecisionID: d.ID,
+				CommitSHA:  opts.CommitSHA,
+				Payload:    payload,
+			})
+			return err
+		}
+		return applyTransitionTx(tx, d, types.StatusViolated,
+			types.EventDecisionViolated, types.ActorSystem, payload, opts.CommitSHA)
+	})
+	return recorded, err
 }
 
-// Reinstate moves a violated decision back to `active` after the violating
-// commit was itself reverted (via = "counter_revert").
-func (s *DecisionStore) Reinstate(id, commitSHA string) error {
-	return s.transition(id, types.StatusActive, types.EventDecisionReinstated, types.ActorSystem,
-		func(d *types.Decision) map[string]any {
-			return map[string]any{"via": "counter_revert"}
-		}, commitSHA)
+// UnresolvedViolations counts the decision's violation episodes that have
+// neither been dismissed nor had their violating commit reverted (A2.2).
+//
+// This is the *n* in ADR-0002 §P8's "VIOLATED (n unresolved)" and the
+// denominator falsifier 2 reads, so it is computed from the event log rather
+// than cached anywhere.
+func (s *DecisionStore) UnresolvedViolations(decisionID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(unresolvedViolationsSQL, decisionID).Scan(&n)
+	return n, err
 }
 
-// DismissViolation records a human dismissing a violation ("false_positive" or
-// "accepted_exception") and reinstates the decision, both in one transaction.
+// unresolvedViolationsSQL counts episodes with no resolution. An episode is
+// resolved by a dismissal naming its event id, or by a revert.detected whose
+// target is the episode's violating commit.
+const unresolvedViolationsSQL = `
+SELECT COUNT(*) FROM events v
+ WHERE v.decision_id = ? AND v.kind = 'decision.violated'
+   AND NOT EXISTS (
+        SELECT 1 FROM events x
+         WHERE x.kind = 'decision.violation_dismissed'
+           AND x.decision_id = v.decision_id
+           AND json_extract(x.payload, '$.violation_event_id') = v.id)
+   AND NOT EXISTS (
+        SELECT 1 FROM events r
+         WHERE r.kind = 'revert.detected'
+           AND v.commit_sha IS NOT NULL
+           AND json_extract(r.payload, '$.reverts_sha') = v.commit_sha)`
+
+func unresolvedViolationsTx(tx *sql.Tx, decisionID string) (int, error) {
+	var n int
+	err := tx.QueryRow(unresolvedViolationsSQL, decisionID).Scan(&n)
+	return n, err
+}
+
+// ReinstateOptions identifies the episode a counter-revert resolves.
+type ReinstateOptions struct {
+	// ViolatingSHA is the violating commit that has itself been reverted —
+	// this is what names the episode.
+	ViolatingSHA string
+	// CommitSHA is the reverting commit.
+	CommitSHA string
+}
+
+// Reinstate records that a violating commit was itself reverted, resolving
+// *that episode only*, and returns the decision to `active` at the
+// zero-crossing — when no unresolved episode remains (A2.2).
+//
+// The resolution record is the revert.detected event (§D7), written here in
+// the same transaction as any transition. The observer, when it lands, calls
+// this rather than emitting revert.detected on its own, so a counter-revert
+// produces exactly one record; a repeat call for the same pair writes nothing.
+func (s *DecisionStore) Reinstate(id string, opts ReinstateOptions) error {
+	return s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+
+		if opts.ViolatingSHA != "" {
+			var existing int
+			if err := tx.QueryRow(`
+				SELECT COUNT(*) FROM events
+				 WHERE kind = 'revert.detected'
+				   AND json_extract(payload, '$.reverts_sha') = ?`,
+				opts.ViolatingSHA).Scan(&existing); err != nil {
+				return err
+			}
+			if existing == 0 {
+				if _, err := appendEvent(tx, EventInput{
+					ProjectID: d.ProjectID,
+					Kind:      types.EventRevertDetected,
+					Actor:     types.ActorSystem,
+					CommitSHA: opts.CommitSHA,
+					Payload: map[string]any{
+						"reverts_sha": opts.ViolatingSHA,
+						"method":      "trailer",
+					},
+				}); err != nil {
+					return err
+				}
+			}
+		}
+
+		if d.Status != types.StatusViolated {
+			return nil
+		}
+		unresolved, err := unresolvedViolationsTx(tx, d.ID)
+		if err != nil {
+			return err
+		}
+		if unresolved > 0 {
+			// Other episodes are still open: the decision stays violated and no
+			// reinstatement event is emitted. §P8's marker keeps counting.
+			return nil
+		}
+		return applyTransitionTx(tx, d, types.StatusActive, types.EventDecisionReinstated,
+			types.ActorSystem, map[string]any{"via": "counter_revert"}, opts.CommitSHA)
+	})
+}
+
+// DismissViolation records a human dismissing one violation episode
+// ("false_positive" or "accepted_exception") and reinstates the decision if
+// that was the last unresolved episode (A2.2).
+//
+// violationEventID is validated: it must name a decision.violated event of
+// *this* decision that is currently unresolved. Dismissing a foreign or
+// already-resolved episode is a typed error, not a silent reinstatement — the
+// unresolved arithmetic §P8 and falsifier 2 read must not be corruptible by a
+// dangling or duplicate dismissal. (The shipped version reinstated
+// unconditionally and validated nothing, which was harmless only while at most
+// one violation event could exist.)
 func (s *DecisionStore) DismissViolation(id, violationEventID, reason string) error {
 	return s.withTx(func(tx *sql.Tx) error {
 		d, err := loadDecisionTx(tx, id)
 		if err != nil {
 			return err
 		}
-		if err := types.CheckTransition(d.Status, types.StatusActive); err != nil {
+
+		var episodeDecision string
+		var episodeSHA sql.NullString
+		err = tx.QueryRow(`
+			SELECT decision_id, commit_sha FROM events
+			 WHERE id = ? AND kind = 'decision.violated'`, violationEventID).
+			Scan(&episodeDecision, &episodeSHA)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("%w: %s", types.ErrUnknownViolationEpisode, violationEventID)
+		case err != nil:
 			return err
 		}
+		if episodeDecision != d.ID {
+			return fmt.Errorf("%w: %s belongs to decision %s",
+				types.ErrUnknownViolationEpisode, violationEventID, episodeDecision)
+		}
+
+		resolved, err := episodeResolvedTx(tx, violationEventID, episodeSHA)
+		if err != nil {
+			return err
+		}
+		if resolved {
+			return fmt.Errorf("%w: %s", types.ErrViolationAlreadyResolved, violationEventID)
+		}
+
 		if _, err := appendEvent(tx, EventInput{
 			ProjectID:  d.ProjectID,
 			Kind:       types.EventDecisionViolationDismissed,
@@ -660,12 +848,44 @@ func (s *DecisionStore) DismissViolation(id, violationEventID, reason string) er
 		}); err != nil {
 			return err
 		}
-		if d.Status == types.StatusActive {
+
+		if d.Status != types.StatusViolated {
 			return nil // nothing to reinstate
+		}
+		unresolved, err := unresolvedViolationsTx(tx, d.ID)
+		if err != nil {
+			return err
+		}
+		if unresolved > 0 {
+			return nil // other episodes remain open
 		}
 		return applyTransitionTx(tx, d, types.StatusActive, types.EventDecisionReinstated,
 			types.ActorHuman, map[string]any{"via": "dismissal"}, "")
 	})
+}
+
+// episodeResolvedTx reports whether one episode already has a resolution.
+func episodeResolvedTx(tx *sql.Tx, eventID string, commitSHA sql.NullString) (bool, error) {
+	var n int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM events
+		 WHERE kind = 'decision.violation_dismissed'
+		   AND json_extract(payload, '$.violation_event_id') = ?`, eventID).Scan(&n); err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	if !commitSHA.Valid || commitSHA.String == "" {
+		return false, nil
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM events
+		 WHERE kind = 'revert.detected'
+		   AND json_extract(payload, '$.reverts_sha') = ?`, commitSHA.String).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // MarkExpired emits decision.expired the first time any component observes a
