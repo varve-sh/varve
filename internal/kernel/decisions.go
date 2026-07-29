@@ -1055,6 +1055,98 @@ func episodeResolvedTx(tx *sql.Tx, eventID string, commitSHA sql.NullString) (bo
 	return n > 0, nil
 }
 
+// RequestDisposal records an agent asking for a decision to be disposed of,
+// without transitioning anything (ADR-0001 Amendment 3, A3.1).
+//
+// §D3's forget mapping is channel-dependent: via CLI/TUI the human *is* the
+// confirmation and the transition happens; via MCP it does not. "The user
+// wanted this thrown away" is exactly as untrustworthy as "the user approved"
+// (OQ3), and it is worse for a binding decision — the old mapping let an agent
+// launder a repeal into active → reverted. Recording the request keeps three
+// things true at once: `rejected` still means a human declined; the agent
+// cannot erase the record of its own bad proposal, because the row and the
+// request both stay visible until a human rules; and the in-chat "forget that"
+// flow still succeeds at the tool level, so agents are not trained to ignore a
+// refusal they hit constantly.
+//
+// Repeats are legal facts and are not deduplicated: an index to suppress them
+// would be a migration spent on noise control.
+func (s *DecisionStore) RequestDisposal(id, reason string, actor types.Actor) error {
+	if actor == "" {
+		actor = types.ActorAgent
+	}
+	return s.withTx(func(tx *sql.Tx) error {
+		d, err := loadDecisionTx(tx, id)
+		if err != nil {
+			return err
+		}
+		payload := map[string]any{}
+		if reason != "" {
+			payload["reason"] = reason
+		}
+		_, err = s.emit(tx, EventInput{
+			ProjectID:  d.ProjectID,
+			Kind:       types.EventDecisionDisposalRequested,
+			Actor:      actor,
+			DecisionID: d.ID,
+			Payload:    payload,
+		})
+		return err
+	})
+}
+
+// DisposalRequest is a pending agent request to dispose of a decision.
+type DisposalRequest struct {
+	Decision  types.Decision
+	Reason    string
+	Requested time.Time
+	Count     int // how many times it has been asked for
+}
+
+// PendingDisposals lists non-terminal decisions carrying disposal requests,
+// newest request first.
+//
+// A request that nobody can see is not "one keystroke away from confirmed" —
+// it is a silent drop. This is what the review surfaces triage (A3.1).
+func (s *DecisionStore) PendingDisposals(projectID string) ([]DisposalRequest, error) {
+	q := `SELECT e.decision_id, MAX(e.ts), COUNT(*),
+	             json_extract(e.payload, '$.reason')
+	        FROM events e
+	        JOIN decisions d ON d.id = e.decision_id
+	       WHERE e.kind = 'decision.disposal_requested'
+	         AND d.status IN ('proposed','active','violated')`
+	var args []any
+	if projectID != "" {
+		q += " AND d.project_id = ?"
+		args = append(args, projectID)
+	}
+	q += " GROUP BY e.decision_id ORDER BY MAX(e.ts) DESC"
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing disposal requests: %w", err)
+	}
+	defer rows.Close()
+
+	var out []DisposalRequest
+	for rows.Next() {
+		var id, ts string
+		var count int
+		var reason sql.NullString
+		if err := rows.Scan(&id, &ts, &count, &reason); err != nil {
+			return nil, err
+		}
+		d, err := s.GetDecision(id)
+		if err != nil {
+			return nil, err
+		}
+		req := DisposalRequest{Decision: *d, Reason: reason.String, Count: count}
+		req.Requested, _ = time.Parse(time.RFC3339Nano, ts)
+		out = append(out, req)
+	}
+	return out, rows.Err()
+}
+
 // MarkExpired emits decision.expired the first time any component observes a
 // decision to be expired. Expiry is a derived predicate and changes no state
 // (D2). Reports whether the event was new.

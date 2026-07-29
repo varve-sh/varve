@@ -13,6 +13,7 @@ memtrace export  [--output memories.json] [--format json|markdown] [--type decis
 memtrace decision pending
 memtrace decision accept <id|prefix> [--evidence commit:<sha>] [--force]
 memtrace decision reject <id|prefix> [--reason "..."]
+memtrace decision revert <id|prefix>
 memtrace decision promote <note-id|prefix> [--title "..."] [--kind convention] [--scope "src/**"]
 memtrace import  <file|url> [--format json|markdown] [--type decision] [--dry-run]
 memtrace browse
@@ -114,11 +115,19 @@ rejection are CLI/TUI actions only — an agent asserting "the user approved" is
 exactly the assertion the quarantine exists to distrust.
 
 ```bash
-memtrace decision pending                                   # the confirmation queue
+memtrace decision pending                                   # the confirmation queue, incl. agent disposal requests
 memtrace decision accept 01KMDX71NT --evidence commit:9f2c1ab
 memtrace decision accept 01KMDX71NT --force                 # no evidence; recorded in the audit trail
 memtrace decision reject 01KMDX71NT --reason "duplicate"
+memtrace decision revert 01KMDX71NT                         # repeal a binding decision (terminal)
 ```
+
+**An agent cannot dispose of a decision.** `memory_forget` over MCP records a
+`decision.disposal_requested` event and transitions nothing — "the user wanted
+this thrown away" is exactly as untrustworthy as "the user approved". The
+request shows up in `memtrace decision pending`; you confirm it with
+`decision reject` (while proposed) or `decision revert` (once binding), or
+ignore it. Notes are ungoverned and are still deleted outright on any channel.
 
 `memtrace decision promote` turns a note into a proposed decision, through the
 ordinary lifecycle, so it is born with provenance and a quarantine rather than

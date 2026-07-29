@@ -287,59 +287,99 @@ func (k *MemoryKernel) Update(id string, input types.MemoryUpdateInput) (*types.
 	return k.store.FindByID(id)
 }
 
-// Delete removes a memory.
+// DisposalOutcome reports what a forget actually did. The caller has to be
+// able to tell the difference: under ADR-0001 Amendment 3 an agent's forget of
+// a decision changes nothing, and reporting that as a deletion would be the
+// same class of lie as the actor field F28 fixed.
+type DisposalOutcome int
+
+const (
+	// DisposalNothing: no such row, or a decision already terminal.
+	DisposalNothing DisposalOutcome = iota
+	// DisposalDeleted: a note, or an event-free decision, was hard-deleted.
+	DisposalDeleted
+	// DisposalRejected: proposed → rejected (human channel).
+	DisposalRejected
+	// DisposalReverted: active/violated → reverted (human channel).
+	DisposalReverted
+	// DisposalRequested: recorded for human confirmation, nothing transitioned.
+	DisposalRequested
+)
+
+// Forget disposes of a memory, by the rules of the channel it came from.
 //
-// Notes keep v1 hard-delete semantics. A decision that has any event history is
-// never hard-deleted (ADR-0001 D3): "forget" maps onto a lifecycle transition —
-// `rejected` while proposed, `reverted` once binding — so the audit record
-// survives. Only an event-free decision can actually be dropped, and the FK
-// from `events` is the backstop.
+// Notes keep v1 hard-delete semantics on every channel — they are ungoverned
+// (D1). A decision with any event history is never hard-deleted (D3): "forget"
+// maps onto the lifecycle, and §D3's mapping is **channel-dependent**
+// (Amendment 3, A3.1):
 //
-// actor is who asked, and it is recorded as such. The CLI and TUI pass
-// `human`; the MCP path passes `agent`, because an agent calling memory_forget
-// on its own proposal is an agent disposing of it, whatever policy we later
-// settle on for whether it may. Recording that as `actor=human` next to
-// `agent=mcp` put a row in an append-only log asserting a human did something
-// no human did.
-func (k *MemoryKernel) Delete(id string, actor types.Actor) (bool, error) {
+//   - actor `human` (CLI, TUI): the human is the confirmation, so the
+//     transition happens — `rejected` while proposed, `reverted` once binding.
+//   - actor `agent` (MCP): nothing transitions. A `decision.disposal_requested`
+//     event is recorded and the caller is told the request awaits human
+//     confirmation. "The user wanted this thrown away" is exactly as
+//     untrustworthy as "the user approved" (OQ3), and it was worse in the half
+//     nobody had named: the old mapping let an agent launder a repeal of a
+//     *binding* decision into active → reverted.
+//
+// The actor is also recorded as the actor, which is F28's other half.
+func (k *MemoryKernel) Forget(id string, actor types.Actor) (DisposalOutcome, error) {
 	if actor == "" {
 		actor = types.ActorHuman
 	}
 	class, err := k.store.classOf(id)
 	if err != nil || class == "" {
-		return false, err
+		return DisposalNothing, err
 	}
 	if class == "note" {
-		return k.store.DeleteByID(id)
+		deleted, err := k.store.DeleteByID(id)
+		if err != nil || !deleted {
+			return DisposalNothing, err
+		}
+		return DisposalDeleted, nil
 	}
 
 	d, err := k.decisions.GetDecision(id)
 	if err != nil {
-		return false, err
+		return DisposalNothing, err
 	}
 	events, err := k.decisions.Events(EventFilter{DecisionID: id, Limit: 1})
 	if err != nil {
-		return false, err
+		return DisposalNothing, err
 	}
 	if len(events) == 0 {
-		return k.store.DeleteByID(id)
+		// No history to protect, so this is a plain delete on either channel.
+		deleted, err := k.store.DeleteByID(id)
+		if err != nil || !deleted {
+			return DisposalNothing, err
+		}
+		return DisposalDeleted, nil
 	}
+
+	if d.Status.IsTerminal() {
+		return DisposalNothing, nil // already disposed of; nothing to do
+	}
+
+	k.governanceStamp()
+
+	if actor == types.ActorAgent {
+		if err := k.decisions.RequestDisposal(id, "", actor); err != nil {
+			return DisposalNothing, err
+		}
+		return DisposalRequested, nil
+	}
+
 	switch d.Status {
 	case types.StatusProposed:
 		// No reason is invented here. The event records a human rejecting the
 		// proposal, which is what happened; "forgotten" was a justification the
 		// user never gave, and it is append-only once written.
-		k.governanceStamp()
-		return true, k.decisions.Reject(id, "", actor)
-	case types.StatusActive, types.StatusViolated:
-		k.governanceStamp()
-		// §D7 fixes the `via` vocabulary to "revert_detected" | "human", where
-		// "human" means "an explicit repeal rather than a detector's verdict".
-		// It stays that on an agent-initiated forget — nothing detected
-		// anything — and the `actor` column carries who asked.
-		return true, k.decisions.Revert(id, RevertOptions{Via: "human", Actor: actor})
+		return DisposalRejected, k.decisions.Reject(id, "", actor)
 	default:
-		return false, nil // already terminal — nothing to do
+		// §D7 fixes the `via` vocabulary to "revert_detected" | "human", where
+		// "human" means "an explicit repeal rather than a detector's verdict" —
+		// which is what this is.
+		return DisposalReverted, k.decisions.Revert(id, RevertOptions{Via: "human", Actor: actor})
 	}
 }
 

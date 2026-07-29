@@ -250,11 +250,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			if m.selected != nil {
 				id := m.selected.ID
-				done, err := m.kernel.Delete(id, types.ActorHuman)
+				outcome, err := m.kernel.Forget(id, types.ActorHuman)
 				if err != nil {
 					return m, func() tea.Msg { return errMsg{err} }
 				}
-				if !done {
+				if outcome == kernel.DisposalNothing {
 					// Nothing happened — an already-terminal decision has
 					// nothing to forget. Reporting it as removed dropped the row
 					// from the list until the next reload brought it back (F29).

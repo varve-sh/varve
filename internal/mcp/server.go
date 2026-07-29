@@ -241,7 +241,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 	// Tool 3: memory_forget
 	s.AddTool(
 		mcp.NewTool("memory_forget",
-			mcp.WithDescription("Delete a specific memory by ID, or archive the top memory matching a query. Use to remove outdated or incorrect memories."),
+			mcp.WithDescription("Forget a memory: delete a note by ID, or act on the top memory matching a query. Notes are deleted outright. A decision or convention is NOT deleted, rejected or reverted by this call — disposal of a governed memory is a human action, so the call records a disposal request and returns it as pending; tell the user it awaits their confirmation with `memtrace decision reject <id>` or `memtrace decision revert <id>`."),
 			mcp.WithString("id",
 				mcp.Description("Specific memory ID to delete"),
 			),
@@ -255,18 +255,15 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			query, _ := args["query"].(string)
 
 			if id != "" {
-				// An agent-initiated disposal is recorded as an agent's, not a
-				// human's (F28). Whether MCP should be able to reach the
-				// human-confirmed half of §D3's matrix at all is a separate,
-				// open policy question; the attribution is not open.
-				deleted, err := k.Delete(id, types.ActorAgent)
+				// The MCP channel disposes of nothing governed: an agent's forget
+				// of a decision records a request and transitions nothing
+				// (ADR-0001 Amendment 3, A3.1). The actor is the agent, which is
+				// F28's other half.
+				outcome, err := k.Forget(id, types.ActorAgent)
 				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				if !deleted {
-					return mcp.NewToolResultText(fmt.Sprintf("Memory %s not found", id)), nil
-				}
-				return mcp.NewToolResultText(fmt.Sprintf("Deleted memory %s", id)), nil
+				return mcp.NewToolResultText(forgetResult(outcome, id, "")), nil
 			}
 
 			if query != "" {
@@ -278,11 +275,12 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 					return mcp.NewToolResultText("No matching memory found."), nil
 				}
 				m := results[0].Memory
-				if _, err := k.Delete(m.ID, types.ActorAgent); err != nil {
+				outcome, err := k.Forget(m.ID, types.ActorAgent)
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 				return mcp.NewToolResultText(
-					fmt.Sprintf("Deleted memory %s: %s", m.ID, truncateStr(m.Content, 100)),
+					forgetResult(outcome, m.ID, truncateStr(m.Content, 100)),
 				), nil
 			}
 
@@ -442,6 +440,34 @@ func statusLabel(m types.Memory) string {
 		return ""
 	default:
 		return " · " + string(m.Status)
+	}
+}
+
+// forgetResult says what actually happened, in the words the agent should
+// repeat to the user.
+//
+// The disposal-request case is a success with an explanation, not an error:
+// the user's in-chat "forget that" did reach the store, and a refusal agents
+// hit constantly is a refusal they learn to ignore (ADR-0001 Amendment 3,
+// rejected alternative (i)). What it must not do is claim a deletion that did
+// not happen.
+func forgetResult(outcome kernel.DisposalOutcome, id, preview string) string {
+	suffix := ""
+	if preview != "" {
+		suffix = ": " + preview
+	}
+	switch outcome {
+	case kernel.DisposalDeleted:
+		return fmt.Sprintf("Deleted memory %s%s", id, suffix)
+	case kernel.DisposalRequested:
+		return fmt.Sprintf(
+			"Disposal request recorded for decision %s%s. Nothing was deleted, rejected or "+
+				"reverted: disposing of a governed memory is a human action. Tell the user the "+
+				"request is pending their confirmation — `memtrace decision reject %s` while it "+
+				"is proposed, or `memtrace decision revert %s` once it is binding.",
+			id, suffix, id, id)
+	default:
+		return fmt.Sprintf("Memory %s not found, or already disposed of", id)
 	}
 }
 

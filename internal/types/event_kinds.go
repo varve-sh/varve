@@ -30,7 +30,15 @@ const (
 	EventDecisionReinstated         EventKind = "decision.reinstated"
 	EventDecisionReverted           EventKind = "decision.reverted"
 	EventDecisionExpired            EventKind = "decision.expired"
-	EventEvidenceAdded              EventKind = "evidence.added"
+	// EventDecisionDisposalRequested records an MCP-channel forget of a
+	// decision (ADR-0001 Amendment 3, A3.1). It transitions nothing: "the user
+	// wanted this thrown away" is exactly as untrustworthy as "the user
+	// approved" (OQ3), and it applies with more force to a *binding* decision,
+	// where the old mapping let an agent launder a repeal into
+	// active → reverted. The terminal call stays human. Repeats are legal facts
+	// — no dedup index, deliberately.
+	EventDecisionDisposalRequested EventKind = "decision.disposal_requested"
+	EventEvidenceAdded             EventKind = "evidence.added"
 )
 
 // Attribution-substrate events. Emitted by the packer (ADR-0002) and the
@@ -62,6 +70,7 @@ var knownEventKinds = map[EventKind]bool{
 	EventDecisionReinstated:         true,
 	EventDecisionReverted:           true,
 	EventDecisionExpired:            true,
+	EventDecisionDisposalRequested:  true,
 	EventEvidenceAdded:              true,
 	EventSessionStarted:             true,
 	EventSessionEnded:               true,

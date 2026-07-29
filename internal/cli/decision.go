@@ -26,7 +26,7 @@ func newDecisionCmd() *cobra.Command {
 			"`proposed`: they neither bind nor pack until a human accepts them.",
 	}
 	cmd.AddCommand(newDecisionPendingCmd(), newDecisionAcceptCmd(), newDecisionRejectCmd(),
-		newDecisionPromoteCmd())
+		newDecisionRevertCmd(), newDecisionPromoteCmd())
 	return cmd
 }
 
@@ -50,7 +50,20 @@ func newDecisionPendingCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(ds) == 0 {
+			// An agent's forget of a decision records a request and transitions
+			// nothing (ADR-0001 Amendment 3). The human confirmation is only
+			// "one keystroke away" if the request is visible where proposals are
+			// triaged, so it is listed here — including for binding decisions,
+			// which never appear in the proposals list.
+			disposals, err := k.Decisions().PendingDisposals("")
+			if err != nil {
+				return err
+			}
+			requested := make(map[string]kernel.DisposalRequest, len(disposals))
+			for _, r := range disposals {
+				requested[r.Decision.ID] = r
+			}
+			if len(ds) == 0 && len(disposals) == 0 {
 				fmt.Println("No decisions are awaiting confirmation.")
 				return nil
 			}
@@ -66,9 +79,37 @@ func newDecisionPendingCmd() *cobra.Command {
 					meta = append(meta, "scope: "+strings.Join(d.Scope, ", "))
 				}
 				dim.Printf("    %s\n", strings.Join(meta, " | "))
+				if r, ok := requested[d.ID]; ok {
+					printDisposalRequest(r)
+				}
 				fmt.Println()
 			}
-			dim.Printf("Accept with 'memtrace decision accept <id>', decline with 'memtrace decision reject <id>'.\n")
+
+			// Binding decisions an agent asked to have disposed of. They are not
+			// proposals, so nothing else lists them for review.
+			var binding []kernel.DisposalRequest
+			for _, r := range disposals {
+				if r.Decision.Status != types.StatusProposed {
+					binding = append(binding, r)
+				}
+			}
+			if len(binding) > 0 {
+				color.New(color.Bold).Printf("Disposal requested by an agent:\n\n")
+				for i, r := range binding {
+					fmt.Printf("[%d] %s  ", i+1,
+						typeColorFor(types.MemoryType(r.Decision.Kind)).Sprint(string(r.Decision.Kind)))
+					dim.Printf("%s", shortID(r.Decision.ID))
+					color.New(color.FgRed).Printf("  [%s]", r.Decision.Status)
+					fmt.Println()
+					fmt.Printf("    %s\n", r.Decision.Title)
+					printDisposalRequest(r)
+					fmt.Println()
+				}
+				dim.Printf("Confirm with 'memtrace decision revert <id>', or leave it binding by doing nothing.\n")
+			}
+			if len(ds) > 0 {
+				dim.Printf("Accept with 'memtrace decision accept <id>', decline with 'memtrace decision reject <id>'.\n")
+			}
 			return nil
 		},
 	}
@@ -166,6 +207,20 @@ func newDecisionAcceptCmd() *cobra.Command {
 	return cmd
 }
 
+// printDisposalRequest renders an agent's pending request to dispose of a
+// decision. Nothing has happened to the row yet — the wording must not suggest
+// otherwise (ADR-0001 Amendment 3).
+func printDisposalRequest(r kernel.DisposalRequest) {
+	msg := "    disposal requested by an agent"
+	if r.Count > 1 {
+		msg += fmt.Sprintf(" (%d times)", r.Count)
+	}
+	if r.Reason != "" {
+		msg += ": " + r.Reason
+	}
+	color.New(color.FgYellow).Printf("%s\n", msg)
+}
+
 func newDecisionRejectCmd() *cobra.Command {
 	var reason string
 	cmd := &cobra.Command{
@@ -194,6 +249,45 @@ func newDecisionRejectCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "Why the proposal was declined (recorded in the event)")
+	return cmd
+}
+
+func newDecisionRevertCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "revert <id|prefix>",
+		Short: "Repeal a binding decision (active|violated → reverted)",
+		Long: "A repeal is terminal: re-adopting the rule later means a new decision " +
+			"citing this one, never a resurrection (ADR-0001 D3/D5). This is the human " +
+			"confirmation an agent's disposal request waits for.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, _, err := openKernel()
+			if err != nil {
+				return err
+			}
+			defer k.Close()
+
+			id, err := resolveDecisionID(k, args[0])
+			if err != nil {
+				return err
+			}
+			outcome, err := k.Forget(id, types.ActorHuman)
+			if err != nil {
+				return err
+			}
+			switch outcome {
+			case kernel.DisposalReverted:
+				fmt.Printf("Reverted %s — kept as a reverted audit record\n", id)
+			case kernel.DisposalRejected:
+				fmt.Printf("Rejected %s — it was still a proposal, so it is kept as a rejected audit record\n", id)
+			case kernel.DisposalDeleted:
+				fmt.Printf("Deleted %s — it had no history to keep\n", id)
+			default:
+				fmt.Printf("Decision %s is already terminal; nothing to revert\n", id)
+			}
+			return nil
+		},
+	}
 	return cmd
 }
 

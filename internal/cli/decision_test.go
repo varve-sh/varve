@@ -448,3 +448,88 @@ func TestDecisionCmds_GovernanceActionsCarryTheCLISession(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0001 Amendment 3 (A3.1), the human end. An agent's disposal request is
+// only "one keystroke from confirmed" if a human can see it where proposals are
+// triaged — including for binding decisions, which never appear in the
+// proposals list at all.
+func TestDecisionPendingCmd_ShowsDisposalRequests(t *testing.T) {
+	k, _ := proposedProject(t)
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	proposal := ds[0].ID
+
+	// A binding decision the agent also wants gone.
+	binding, _, err := k.Save(types.MemorySaveInput{
+		Content: "Sessions are server-side only.",
+		Type:    types.MemoryTypeDecision,
+		Source:  types.MemorySourceUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{proposal, binding.ID} {
+		if _, err := k.Forget(id, types.ActorAgent); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Nothing transitioned on either.
+	if d, _ := k.Decisions().GetDecision(proposal); d.Status != types.StatusProposed {
+		t.Errorf("proposal status = %s, want proposed", d.Status)
+	}
+	if d, _ := k.Decisions().GetDecision(binding.ID); d.Status != types.StatusActive {
+		t.Errorf("binding status = %s, want active — an agent may not repeal it", d.Status)
+	}
+
+	out, err := runCmd(t, "decision", "pending")
+	if err != nil {
+		t.Fatalf("decision pending: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "All handlers must validate") {
+		t.Errorf("the proposal is missing from the queue:\n%s", out)
+	}
+	if !strings.Contains(out, "Sessions are server-side only.") {
+		t.Errorf("a binding decision with a disposal request is invisible to triage:\n%s", out)
+	}
+	if strings.Count(out, "disposal requested by an agent") != 2 {
+		t.Errorf("both requests must be shown as requests:\n%s", out)
+	}
+	if !strings.Contains(out, "decision revert") {
+		t.Errorf("the queue does not say how to confirm a disposal:\n%s", out)
+	}
+
+	// The human confirmation is the transition.
+	if out, err := runCmd(t, "decision", "revert", binding.ID[:12]); err != nil {
+		t.Fatalf("decision revert: %v\n%s", err, out)
+	}
+	d, err := k.Decisions().GetDecision(binding.ID)
+	if err != nil {
+		t.Fatalf("the row must survive as an audit record: %v", err)
+	}
+	if d.Status != types.StatusReverted {
+		t.Errorf("status = %s after human confirmation, want reverted", d.Status)
+	}
+	// And it leaves the triage queue.
+	out, _ = runCmd(t, "decision", "pending")
+	if strings.Contains(out, "Sessions are server-side only.") {
+		t.Errorf("a confirmed disposal is still in the queue:\n%s", out)
+	}
+}
+
+// The CLI is the human channel, so `rm` still transitions — and says which
+// transition it made rather than claiming a deletion.
+func TestRmCmd_NamesTheTransitionItMade(t *testing.T) {
+	k, _ := proposedProject(t)
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+
+	out, err := runCmd(t, "rm", ds[0].ID[:12])
+	if err != nil {
+		t.Fatalf("rm: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Rejected") {
+		t.Errorf("`rm` on a proposal reports %q; it rejects, it does not delete", out)
+	}
+	if d, _ := k.Decisions().GetDecision(ds[0].ID); d.Status != types.StatusRejected {
+		t.Errorf("status = %s, want rejected", d.Status)
+	}
+}

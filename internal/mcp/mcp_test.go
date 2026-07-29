@@ -28,7 +28,9 @@ func setupServer(t *testing.T) (*server.MCPServer, *kernel.MemoryKernel) {
 	t.Cleanup(func() { k.Close() })
 
 	s := server.NewMCPServer("memtrace", "0.0.0", server.WithToolCapabilities(true))
-	registerTools(s, k, newSessionTracker(util.GenerateID()))
+	// Mirror Serve: one connection is one session, announced when it opens
+	// (ADR-0004 §D3), and the tracker takes the kernel's id.
+	registerTools(s, k, newSessionTracker(k.BeginSession(mcpAgentName, "")))
 	return s, k
 }
 
@@ -920,22 +922,21 @@ func TestMCPReadPaths_MarkProposedDecisions(t *testing.T) {
 	}
 }
 
-// F28, attribution half. An agent calling memory_forget on the proposal it
-// saved seconds earlier produced `decision.rejected actor=human agent=mcp` —
-// a row asserting that a human did something no human did, in an append-only
-// log whose entire value is that it is traceable. Whether MCP should be able
-// to reach §D3's human-confirmed transitions at all is a separate, open
-// policy question; the attribution is not open.
-func TestMemoryForget_RecordsTheAgentAsTheActor(t *testing.T) {
+// ADR-0001 Amendment 3 (A3.1). An agent's forget of a decision transitions
+// nothing: it records a request and says so. Before F28's attribution fix the
+// log read `decision.proposed actor=agent` followed seconds later by
+// `decision.rejected actor=human` from the same agent; the policy ruling then
+// removed the transition itself, because "the user wanted this thrown away" is
+// exactly as untrustworthy as "the user approved" (OQ3) — and worse for a
+// binding decision, where the old mapping laundered a repeal into
+// active → reverted.
+func TestMemoryForget_OnADecisionRecordsARequestAndTransitionsNothing(t *testing.T) {
 	s, k := setupServer(t)
 
-	saved := resultText(t, callTool(t, s, "memory_save", map[string]interface{}{
+	callTool(t, s, "memory_save", map[string]interface{}{
 		"content": "Sessions live in Redis.",
 		"type":    "decision",
-	}))
-	if !strings.Contains(saved, "Saved") && !strings.Contains(saved, "memory") {
-		t.Fatalf("unexpected save result: %s", saved)
-	}
+	})
 	ds, err := k.Decisions().ListDecisions(kernel.DecisionFilter{
 		Statuses: []types.DecisionStatus{types.StatusProposed},
 	})
@@ -944,22 +945,87 @@ func TestMemoryForget_RecordsTheAgentAsTheActor(t *testing.T) {
 	}
 	id := ds[0].ID
 
-	callTool(t, s, "memory_forget", map[string]interface{}{"id": id})
+	out := resultText(t, callTool(t, s, "memory_forget", map[string]interface{}{"id": id}))
 
-	proposed, err := k.Decisions().Events(kernel.EventFilter{
-		DecisionID: id, Kind: types.EventDecisionProposed,
-	})
-	if err != nil || len(proposed) != 1 || proposed[0].Actor != types.ActorAgent {
-		t.Fatalf("decision.proposed actor = %v (%v), want agent", proposed, err)
+	// The tool succeeds — the user's in-chat "forget that" reached the store —
+	// but it must not claim a deletion that did not happen.
+	if strings.Contains(out, "Deleted") {
+		t.Errorf("memory_forget claims a deletion that did not happen:\n%s", out)
 	}
-	rejected, err := k.Decisions().Events(kernel.EventFilter{
-		DecisionID: id, Kind: types.EventDecisionRejected,
-	})
-	if err != nil || len(rejected) != 1 {
-		t.Fatalf("decision.rejected events = %d (%v), want 1", len(rejected), err)
+	for _, want := range []string{"Disposal request recorded", "pending their confirmation"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the result does not explain what happened (%q):\n%s", want, out)
+		}
 	}
-	if rejected[0].Actor != types.ActorAgent {
-		t.Errorf("decision.rejected actor = %q, want agent — the disposal was the "+
-			"agent's, and no human was involved", rejected[0].Actor)
+
+	// Nothing transitioned.
+	got, err := k.Decisions().GetDecision(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != types.StatusProposed {
+		t.Errorf("status = %s, want proposed — an agent may not dispose of a decision", got.Status)
+	}
+	for _, kind := range []types.EventKind{
+		types.EventDecisionRejected, types.EventDecisionReverted,
+	} {
+		if evs, _ := k.Decisions().Events(kernel.EventFilter{
+			DecisionID: id, Kind: kind,
+		}); len(evs) != 0 {
+			t.Errorf("%d %s events, want 0", len(evs), kind)
+		}
+	}
+
+	// The request is recorded, attributed to the agent, and carries its session.
+	reqs, err := k.Decisions().Events(kernel.EventFilter{
+		DecisionID: id, Kind: types.EventDecisionDisposalRequested,
+	})
+	if err != nil || len(reqs) != 1 {
+		t.Fatalf("decision.disposal_requested events = %d (%v), want 1", len(reqs), err)
+	}
+	if reqs[0].Actor != types.ActorAgent {
+		t.Errorf("actor = %q, want agent", reqs[0].Actor)
+	}
+	if reqs[0].SessionID == "" {
+		t.Error("the request carries no session; it is unattributable")
+	}
+
+	// Repeats are legal facts, not errors — no dedup index, deliberately.
+	callTool(t, s, "memory_forget", map[string]interface{}{"id": id})
+	reqs, _ = k.Decisions().Events(kernel.EventFilter{
+		DecisionID: id, Kind: types.EventDecisionDisposalRequested,
+	})
+	if len(reqs) != 2 {
+		t.Errorf("disposal requests = %d, want 2 — repeats are facts", len(reqs))
+	}
+
+	// And a human can still see it in the triage queue.
+	pending, err := k.Decisions().PendingDisposals("test-project")
+	if err != nil || len(pending) != 1 || pending[0].Decision.ID != id {
+		t.Fatalf("PendingDisposals = %+v (%v), want the requested decision", pending, err)
+	}
+	if pending[0].Count != 2 {
+		t.Errorf("request count = %d, want 2", pending[0].Count)
+	}
+}
+
+// A note is ungoverned on every channel: an agent's forget really does delete
+// it (D1, D3's "notes keep v1 delete semantics").
+func TestMemoryForget_StillDeletesNotes(t *testing.T) {
+	s, k := setupServer(t)
+
+	saved, _, err := k.Save(types.MemorySaveInput{
+		Content: "CI runs on arm64.", Type: types.MemoryTypeFact,
+		Source: types.MemorySourceUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := resultText(t, callTool(t, s, "memory_forget", map[string]interface{}{"id": saved.ID}))
+	if !strings.Contains(out, "Deleted") {
+		t.Errorf("a note must still be deleted outright:\n%s", out)
+	}
+	if m, _ := k.Get(saved.ID); m != nil {
+		t.Error("the note is still there")
 	}
 }

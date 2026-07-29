@@ -493,9 +493,9 @@ func TestDelete_MapsDecisionsOntoTheLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok, err := k.Delete(active.ID, types.ActorHuman)
-	if err != nil || !ok {
-		t.Fatalf("delete = (%v, %v)", ok, err)
+	outcome, err := k.Forget(active.ID, types.ActorHuman)
+	if err != nil || outcome != DisposalReverted {
+		t.Fatalf("forget = (%v, %v), want DisposalReverted", outcome, err)
 	}
 	d, err := k.Decisions().GetDecision(active.ID)
 	if err != nil {
@@ -512,7 +512,7 @@ func TestDelete_MapsDecisionsOntoTheLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.Delete(proposed.ID, types.ActorHuman); err != nil {
+	if outcome, err := k.Forget(proposed.ID, types.ActorHuman); err != nil || outcome != DisposalRejected {
 		t.Fatal(err)
 	}
 	d, _ = k.Decisions().GetDecision(proposed.ID)
@@ -524,7 +524,7 @@ func TestDelete_MapsDecisionsOntoTheLifecycle(t *testing.T) {
 	note, _, _ := k.Save(types.MemorySaveInput{
 		Content: "disposable", Type: types.MemoryTypeFact, Source: types.MemorySourceUser,
 	})
-	if _, err := k.Delete(note.ID, types.ActorHuman); err != nil {
+	if outcome, err := k.Forget(note.ID, types.ActorHuman); err != nil || outcome != DisposalDeleted {
 		t.Fatal(err)
 	}
 	if m, _ := k.Get(note.ID); m != nil {
