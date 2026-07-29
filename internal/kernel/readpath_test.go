@@ -496,7 +496,7 @@ func TestStats_CountsSessionsByTag(t *testing.T) {
 	if stats.SessionsThisWeek != 2 {
 		t.Errorf("sessions = %d, want 2", stats.SessionsThisWeek)
 	}
-	if stats.TotalActive != 3 {
-		t.Errorf("total active = %d, want 3", stats.TotalActive)
+	if stats.TotalLive != 3 {
+		t.Errorf("total live = %d, want 3", stats.TotalLive)
 	}
 }

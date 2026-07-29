@@ -7,9 +7,12 @@ memtrace save    <content> [--type decision|convention|note] [--tags auth,api] [
 memtrace update  <id|prefix> [--content "..."] [--type ...] [--tags ...] [--files ...] [--confidence 0.9]
 memtrace edit    <id|prefix>
 memtrace search  <query> [--limit 10] [--type decision] [--json]
-memtrace list    [--limit 20] [--type convention] [--status active] [--json]
+memtrace list    [--limit 20] [--type convention] [--status proposed] [--json]
 memtrace rm      <id|prefix>
 memtrace export  [--output memories.json] [--format json|markdown] [--type decision] [--status active]
+memtrace decision pending
+memtrace decision accept <id|prefix> [--evidence commit:<sha>] [--force]
+memtrace decision reject <id|prefix> [--reason "..."]
 memtrace import  <file|url> [--format json|markdown] [--type decision] [--dry-run]
 memtrace browse
 memtrace serve   [--dir <path>]
@@ -94,9 +97,31 @@ List memories with optional filters.
 ```bash
 memtrace list
 memtrace list --type convention
+memtrace list --status proposed   # decisions awaiting confirmation
 memtrace list --status stale
 memtrace list --limit 50 --json
 ```
+
+---
+
+## `memtrace decision`
+
+Decisions and conventions carry a lifecycle. One saved by an agent, an importer
+or the v1 migration lands **`proposed`**: it is captured, but it does not bind
+and it is never packed into context until a human accepts it. Acceptance and
+rejection are CLI/TUI actions only — an agent asserting "the user approved" is
+exactly the assertion the quarantine exists to distrust.
+
+```bash
+memtrace decision pending                                   # the confirmation queue
+memtrace decision accept 01KMDX71NT --evidence commit:9f2c1ab
+memtrace decision accept 01KMDX71NT --force                 # no evidence; recorded in the audit trail
+memtrace decision reject 01KMDX71NT --reason "duplicate"
+```
+
+Acceptance requires at least one evidence row unless `--force` is passed, and a
+forced acceptance is recorded as `"forced": true` on the `decision.accepted`
+event. Rejection is terminal and keeps the record — it is not a delete.
 
 ---
 

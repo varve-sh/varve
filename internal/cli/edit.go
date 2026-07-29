@@ -89,6 +89,20 @@ func newEditCmd() *cobra.Command {
 	}
 }
 
+// resolvableStatuses are the pools resolveID searches, in order. The first is
+// "" — everything live, i.e. active notes plus non-terminal decisions — and the
+// rest are the pools a live query cannot reach. Listing `active` only (the v1
+// behaviour) meant a prefix printed by `list --status proposed` did not resolve
+// for `rm`, `edit` or `update` (ADR-0001 D2/D10).
+var resolvableStatuses = []types.MemoryStatus{
+	"",
+	types.MemoryStatusStale,
+	types.MemoryStatusArchived,
+	types.MemoryStatus(types.StatusSuperseded),
+	types.MemoryStatus(types.StatusReverted),
+	types.MemoryStatus(types.StatusRejected),
+}
+
 // resolveID resolves a full ID or short prefix to a full memory ID.
 // Returns "" if not found or ambiguous.
 func resolveID(k interface {
@@ -97,19 +111,24 @@ func resolveID(k interface {
 	if len(prefix) >= 26 {
 		return prefix
 	}
-	all, err := k.List(types.ListOptions{Limit: 1000, Status: "active"})
-	if err != nil {
-		return ""
-	}
-	var matches []string
 	upper := strings.ToUpper(prefix)
-	for _, m := range all {
-		if strings.HasPrefix(m.ID, upper) {
-			matches = append(matches, m.ID)
+	for _, status := range resolvableStatuses {
+		all, err := k.List(types.ListOptions{Limit: 1000, Status: status})
+		if err != nil {
+			return ""
 		}
-	}
-	if len(matches) == 1 {
-		return matches[0]
+		var matches []string
+		for _, m := range all {
+			if strings.HasPrefix(m.ID, upper) {
+				matches = append(matches, m.ID)
+			}
+		}
+		if len(matches) == 1 {
+			return matches[0]
+		}
+		if len(matches) > 1 {
+			return "" // ambiguous
+		}
 	}
 	return ""
 }

@@ -91,7 +91,8 @@ func (r *MigrationReport) String() string {
 	fmt.Fprintf(&b, "\n  v1 backup  %s  (kept — nothing deletes it)\n", r.BackupPath)
 	fmt.Fprintf(&b, "  export     %s\n", r.ExportPath)
 	if len(r.NeedsTriage) > 0 {
-		fmt.Fprintf(&b, "\n%d stale v1 decisions came over as `proposed` and need re-confirmation.\n",
+		fmt.Fprintf(&b, "\n%d stale v1 decisions came over as `proposed` and need re-confirmation.\n"+
+			"Review them with `memtrace decision pending`, then `memtrace decision accept|reject <id>`.\n",
 			len(r.NeedsTriage))
 	}
 	if len(r.Unevidenced) > 0 {

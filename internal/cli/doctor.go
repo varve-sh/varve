@@ -46,11 +46,22 @@ func newDoctorCmd() *cobra.Command {
 			// 1. Database
 			dbPath := util.GetProjectDbPath(projectRoot)
 			size := dbFileSize(dbPath)
-			total, _ := k.Count("", types.MemoryStatusActive)
+			// "" is everything live: active notes plus non-terminal decisions.
+			// Counting `active` only omitted every proposed decision (ADR-0001 D10).
+			live, _ := k.Count("", "")
 			staleCount, _ := k.Count("", types.MemoryStatusStale)
 			archived, _ := k.Count("", types.MemoryStatusArchived)
-			totalAll := total + staleCount + archived
+			totalAll := live + staleCount + archived
 			ok("Database", fmt.Sprintf("%s (%s, %d memories)", filepath.Join(".memtrace", "memtrace.db"), size, totalAll))
+
+			// 1b. The confirmation queue. A proposal that nobody sees is a
+			// quarantine with no exit (ADR-0001 D2, open question 3).
+			if pending := pendingProposalCount(k); pending > 0 {
+				warn("Pending decisions", fmt.Sprintf(
+					"%d awaiting confirmation — run 'memtrace decision pending' to review", pending))
+			} else {
+				ok("Pending decisions", "none")
+			}
 
 			// 2. Stale memories
 			if staleCount > 0 {

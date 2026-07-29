@@ -57,7 +57,14 @@ func newListCmd() *cobra.Command {
 
 	cmd.Flags().IntVar(&limit, "limit", 20, "Max results")
 	cmd.Flags().StringVar(&memType, "type", "", "Filter by type: decision, convention, note")
-	cmd.Flags().StringVar(&status, "status", "active", "Filter by status: active, stale, archived")
+	// Default "" means "everything live" — active notes plus non-terminal
+	// decisions (proposed, active, violated). Defaulting to `active` hid every
+	// agent-saved decision, which by design is now every one of them until a
+	// human accepts it (ADR-0001 D2/D10).
+	cmd.Flags().StringVar(&status, "status", "",
+		"Filter by status (default: everything live). "+
+			"Notes: active, stale, archived. "+
+			"Decisions: proposed, active, violated, superseded, reverted, rejected")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	return cmd
 }

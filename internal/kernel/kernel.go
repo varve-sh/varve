@@ -591,7 +591,10 @@ func filePathsToQuery(paths []string) string {
 
 // StatsResult holds usage metrics for the memory store.
 type StatsResult struct {
-	TotalActive      int
+	// TotalLive counts everything still live: active notes plus non-terminal
+	// decisions (proposed, active, violated). Counting `active` only left every
+	// proposed decision out of every total the product prints (ADR-0001 D10).
+	TotalLive        int
 	SavedThisWeek    int
 	RecallsThisWeek  int
 	SessionsThisWeek int
@@ -602,7 +605,7 @@ type StatsResult struct {
 func (k *MemoryKernel) Stats(window time.Duration) (StatsResult, error) {
 	since := time.Now().UTC().Add(-window)
 
-	total, err := k.store.Count("", types.MemoryStatusActive)
+	total, err := k.store.Count("", "")
 	if err != nil {
 		return StatsResult{}, err
 	}
@@ -645,7 +648,7 @@ func (k *MemoryKernel) Stats(window time.Duration) (StatsResult, error) {
 	}
 
 	return StatsResult{
-		TotalActive:      total,
+		TotalLive:        total,
 		SavedThisWeek:    saved,
 		RecallsThisWeek:  recalls,
 		SessionsThisWeek: sessionCount,

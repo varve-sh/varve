@@ -848,8 +848,8 @@ func TestStatsCmd_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "Total active memories") {
-		t.Errorf("expected 'Total active memories', got: %s", out)
+	if !strings.Contains(out, "Live memories") {
+		t.Errorf("expected 'Live memories', got: %s", out)
 	}
 	if !strings.Contains(out, "Saved this period") {
 		t.Errorf("expected 'Saved this period', got: %s", out)
@@ -873,8 +873,8 @@ func TestStatsCmd_JSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
 	}
-	if _, ok := result["total_active"]; !ok {
-		t.Errorf("expected 'total_active' in JSON, got: %s", out)
+	if _, ok := result["total_live"]; !ok {
+		t.Errorf("expected 'total_live' in JSON, got: %s", out)
 	}
 	if _, ok := result["recalls_this_period"]; !ok {
 		t.Errorf("expected 'recalls_this_period' in JSON, got: %s", out)

@@ -1,0 +1,234 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/fatih/color"
+	"github.com/memtrace-dev/memtrace/internal/kernel"
+	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/spf13/cobra"
+)
+
+// newDecisionCmd is the human-confirmation surface for the decision lifecycle
+// (ADR-0001 D2, open question 3: CLI and TUI only — MCP may propose but never
+// accept, because an agent asserting "the user approved" is exactly the
+// assertion the quarantine exists to distrust).
+//
+// Without it the quarantine is incoherent: four paths create proposals (MCP,
+// `import`, the git importer, the v1→v2 migration) and none can leave one.
+func newDecisionCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "decision",
+		Short: "Review and act on the decision lifecycle",
+		Long: "Decisions saved by an agent, an importer or the v1 migration land " +
+			"`proposed`: they neither bind nor pack until a human accepts them.",
+	}
+	cmd.AddCommand(newDecisionPendingCmd(), newDecisionAcceptCmd(), newDecisionRejectCmd())
+	return cmd
+}
+
+// newDecisionPendingCmd shows the confirmation queue.
+func newDecisionPendingCmd() *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "pending",
+		Short: "List decisions awaiting human confirmation",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, _, err := openKernel()
+			if err != nil {
+				return err
+			}
+			defer k.Close()
+
+			ds, err := k.Decisions().ListDecisions(kernel.DecisionFilter{
+				Statuses: []types.DecisionStatus{types.StatusProposed},
+				Limit:    limit,
+			})
+			if err != nil {
+				return err
+			}
+			if len(ds) == 0 {
+				fmt.Println("No decisions are awaiting confirmation.")
+				return nil
+			}
+			dim := color.New(color.Faint)
+			for i, d := range ds {
+				fmt.Printf("[%d] %s  ", i+1, typeColorFor(types.MemoryType(d.Kind)).Sprint(string(d.Kind)))
+				dim.Printf("%s", shortID(d.ID))
+				color.New(color.FgMagenta).Printf("  [proposed]")
+				fmt.Println()
+				fmt.Printf("    %s\n", d.Title)
+				meta := []string{"source: " + string(d.Source)}
+				if len(d.Scope) > 0 {
+					meta = append(meta, "scope: "+strings.Join(d.Scope, ", "))
+				}
+				dim.Printf("    %s\n", strings.Join(meta, " | "))
+				fmt.Println()
+			}
+			dim.Printf("Accept with 'memtrace decision accept <id>', decline with 'memtrace decision reject <id>'.\n")
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 50, "Max results")
+	return cmd
+}
+
+func newDecisionAcceptCmd() *cobra.Command {
+	var force bool
+	var evidence []string
+	cmd := &cobra.Command{
+		Use:   "accept <id|prefix>",
+		Short: "Accept a proposed decision (proposed → active)",
+		Long: "Acceptance is the human confirmation the quarantine waits for. It requires " +
+			"at least one evidence row unless --force is passed, and a forced acceptance " +
+			"is recorded in the audit trail (ADR-0001 D4).",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, _, err := openKernel()
+			if err != nil {
+				return err
+			}
+			defer k.Close()
+
+			id, err := resolveDecisionID(k, args[0])
+			if err != nil {
+				return err
+			}
+
+			for _, spec := range evidence {
+				in, parseErr := parseEvidence(spec)
+				if parseErr != nil {
+					return parseErr
+				}
+				if _, addErr := k.Decisions().AddEvidence(id, in); addErr != nil {
+					return fmt.Errorf("attaching evidence %q: %w", spec, addErr)
+				}
+			}
+
+			d, err := k.Decisions().Accept(id, kernel.AcceptOptions{
+				Force: force,
+				Actor: types.ActorHuman,
+			})
+			if errors.Is(err, types.ErrNoEvidence) {
+				return fmt.Errorf("%w\n  attach evidence with --evidence commit:<sha> (or pr/test/file/url/import), "+
+					"or accept unevidenced with --force", err)
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Accepted %s: %s\n", d.ID, d.Title)
+			if d.TopicKey != "" {
+				color.New(color.Faint).Printf("  topic_key %s transferred\n", d.TopicKey)
+			}
+			for _, pred := range d.Supersedes {
+				color.New(color.Faint).Printf("  superseded %s\n", pred)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false,
+		"Accept with no evidence; recorded as \"forced\" in the audit trail")
+	cmd.Flags().StringArrayVar(&evidence, "evidence", nil,
+		"Evidence to attach before accepting, as kind:ref (commit, pr, test, file, url, import)")
+	return cmd
+}
+
+func newDecisionRejectCmd() *cobra.Command {
+	var reason string
+	cmd := &cobra.Command{
+		Use:   "reject <id|prefix>",
+		Short: "Decline a proposed decision (proposed → rejected)",
+		Long: "Rejection is a terminal disposal state, not a delete: the audit record " +
+			"survives, because \"we considered X and said no\" is exactly what a later " +
+			"session needs (ADR-0001 D2).",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, _, err := openKernel()
+			if err != nil {
+				return err
+			}
+			defer k.Close()
+
+			id, err := resolveDecisionID(k, args[0])
+			if err != nil {
+				return err
+			}
+			if err := k.Decisions().Reject(id, reason); err != nil {
+				return err
+			}
+			fmt.Printf("Rejected %s\n", id)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&reason, "reason", "", "Why the proposal was declined (recorded in the event)")
+	return cmd
+}
+
+// parseEvidence parses a "kind:ref" flag value. The kind is required and
+// validated by the kernel; being explicit keeps `--evidence 0a1b2c` from
+// silently becoming a commit reference that does not exist.
+func parseEvidence(spec string) (kernel.EvidenceInput, error) {
+	kind, ref, ok := strings.Cut(spec, ":")
+	if !ok || strings.TrimSpace(ref) == "" {
+		return kernel.EvidenceInput{}, fmt.Errorf(
+			"--evidence %q: expected kind:ref, e.g. commit:9f2c1ab", spec)
+	}
+	return kernel.EvidenceInput{
+		Kind:    types.EvidenceKind(strings.TrimSpace(kind)),
+		Ref:     strings.TrimSpace(ref),
+		AddedBy: types.ActorHuman,
+	}, nil
+}
+
+// resolveDecisionID resolves a full ULID or a short prefix against the
+// `decisions` table, across every status. resolveID's projection-based lookup
+// is not usable here: it is for memories, and a lifecycle command must be able
+// to name a row in any state, including the terminal ones.
+func resolveDecisionID(k *kernel.MemoryKernel, prefix string) (string, error) {
+	upper := strings.ToUpper(strings.TrimSpace(prefix))
+	if len(upper) >= 26 {
+		if _, err := k.Decisions().GetDecision(upper); err != nil {
+			return "", fmt.Errorf("decision %s not found", prefix)
+		}
+		return upper, nil
+	}
+	all, err := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	if err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, d := range all {
+		if strings.HasPrefix(d.ID, upper) {
+			matches = append(matches, d.ID)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("decision %s not found", prefix)
+	default:
+		return "", fmt.Errorf("decision %s is ambiguous: %d decisions share that prefix",
+			prefix, len(matches))
+	}
+}
+
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
+}
+
+// pendingProposalCount reports how many decisions are awaiting confirmation.
+func pendingProposalCount(k *kernel.MemoryKernel) int {
+	n, err := k.Decisions().CountDecisions(kernel.DecisionFilter{
+		Statuses: []types.DecisionStatus{types.StatusProposed},
+	})
+	if err != nil {
+		return 0
+	}
+	return n
+}

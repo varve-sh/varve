@@ -46,7 +46,7 @@ func newStatsCmd() *cobra.Command {
 				}
 				out := map[string]interface{}{
 					"window_days":       days,
-					"total_active":      result.TotalActive,
+					"total_live":        result.TotalLive,
 					"saved_this_period": result.SavedThisWeek,
 					"recalls_this_period": result.RecallsThisWeek,
 					"sessions_this_period": result.SessionsThisWeek,
@@ -60,7 +60,7 @@ func newStatsCmd() *cobra.Command {
 			label := fmt.Sprintf("last %d days", days)
 			fmt.Printf("%s\n\n", color.New(color.Bold).Sprint("Memory usage — "+label))
 
-			fmt.Printf("  %-28s %d\n", "Total active memories:", result.TotalActive)
+			fmt.Printf("  %-28s %d\n", "Live memories:", result.TotalLive)
 			fmt.Printf("  %-28s %d\n", "Saved this period:", result.SavedThisWeek)
 			fmt.Printf("  %-28s %d\n", "Recalls this period:", result.RecallsThisWeek)
 			fmt.Printf("  %-28s %d\n", "Sessions this period:", result.SessionsThisWeek)

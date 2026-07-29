@@ -68,8 +68,19 @@ func printMemoryRow(idx int, m *types.Memory, dim *color.Color) {
 	}
 	fmt.Printf("[%d] %s  ", idx, typeColor.Sprint(fmt.Sprintf("%s", m.Type)))
 	dim.Printf("%s", shortID)
-	if m.Status == types.MemoryStatusStale {
+	// Any status other than `active` is worth a marker. `proposed` in
+	// particular is now the birth state of every agent-saved decision, and a
+	// queue the user cannot see is a quarantine with no exit (ADR-0001 D2).
+	switch m.Status {
+	case types.MemoryStatusActive:
+	case types.MemoryStatusStale:
 		color.New(color.FgYellow).Printf("  [stale]")
+	case types.MemoryStatus(types.StatusProposed):
+		color.New(color.FgMagenta).Printf("  [proposed]")
+	case types.MemoryStatus(types.StatusViolated):
+		color.New(color.FgRed).Printf("  [violated]")
+	default:
+		color.New(color.Faint).Printf("  [%s]", m.Status)
 	}
 	fmt.Println()
 	fmt.Printf("    %s\n", m.Content)
