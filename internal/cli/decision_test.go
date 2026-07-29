@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -582,5 +584,69 @@ func TestDecisionRejectCmd_TranslatesTheTransitionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "terminal") {
 		t.Errorf("the message must say why: %v", err)
+	}
+}
+
+// ADR-0001 Amendment 4's CLI surface. Purge is the only irreversible verb in
+// the product, so the ceremony is part of the contract: the id must be typed
+// back, the residue is printed, and there is no MCP equivalent.
+func TestDecisionPurgeCmd_RequiresTheIDTypedBack(t *testing.T) {
+	k, _ := setupProject(t)
+	d, err := k.Decisions().ProposeAccepted(kernel.DecisionInput{
+		ProjectID: k.ProjectID(), Title: "Tokens rotate",
+		Body: "The signing key is sk-live-SECRET.", Source: types.DecisionSourceUser,
+		Evidence: []kernel.EvidenceInput{{
+			Kind: types.EvidenceKindCommit, Ref: "9f2c1ab", AddedBy: types.ActorHuman,
+		}},
+	}, kernel.AcceptOptions{Actor: types.ActorHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A wrong id cancels, and nothing happens.
+	out, err := runCmdStdin(t, "01WRONGIDENTIFIER0000000\n", "decision", "purge", d.ID)
+	if err == nil {
+		t.Fatalf("a mistyped confirmation must cancel the purge, got: %s", out)
+	}
+	got, err := k.Decisions().GetDecision(d.ID)
+	if err != nil || got.Title != "Tokens rotate" {
+		t.Fatalf("the decision must be untouched after a cancelled purge: %+v (%v)", got, err)
+	}
+
+	// The warning names what it cannot reach — before asking.
+	if !strings.Contains(out, "cannot be undone") || !strings.Contains(out, "v1.bak.db") {
+		t.Errorf("the prompt must state the cost and the residue:\n%s", out)
+	}
+
+	// Typed correctly, it goes through.
+	out, err = runCmdStdin(t, d.ID+"\n", "decision", "purge", d.ID)
+	if err != nil {
+		t.Fatalf("purge: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Purged") {
+		t.Errorf("no confirmation printed:\n%s", out)
+	}
+	got, err = k.Decisions().GetDecision(d.ID)
+	if err != nil {
+		t.Fatalf("an evented decision must survive as a tombstone: %v", err)
+	}
+	if got.Title != "[purged]" || got.Body != "" {
+		t.Errorf("row not redacted: %+v", got)
+	}
+	if got.Status != types.StatusReverted {
+		t.Errorf("status = %s, want reverted — a redacted row must not stay binding", got.Status)
+	}
+}
+
+// Purge is CLI/TUI only. The MCP surface must not have grown one.
+func TestDecisionPurge_HasNoMCPEquivalent(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "mcp", "server.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"memory_purge", "k.Purge("} {
+		if strings.Contains(string(src), forbidden) {
+			t.Errorf("the MCP server references %q; purge is a human action (A4.2)", forbidden)
+		}
 	}
 }

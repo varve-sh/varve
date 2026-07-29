@@ -400,6 +400,9 @@ func (k *MemoryKernel) Forget(id string, actor types.Actor) (DisposalOutcome, er
 	}
 }
 
+// ProjectID is the project this kernel is scoped to.
+func (k *MemoryKernel) ProjectID() string { return k.projectID }
+
 // Decisions exposes the governed store for callers that need the lifecycle.
 func (k *MemoryKernel) Decisions() *DecisionStore { return k.decisions }
 

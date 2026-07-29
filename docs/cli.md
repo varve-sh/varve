@@ -15,6 +15,7 @@ memtrace decision accept <id|prefix> [--evidence commit:<sha>] [--force]
 memtrace decision reject <id|prefix> [--reason "..."]
 memtrace decision revert <id|prefix>
 memtrace decision promote <note-id|prefix> [--title "..."] [--kind convention] [--scope "src/**"]
+memtrace decision purge <id> [--reason secret|cleanup] [--yes]
 memtrace import  <file|url> [--format json|markdown] [--type decision] [--dry-run]
 memtrace browse
 memtrace serve   [--dir <path>]
@@ -121,6 +122,22 @@ memtrace decision accept 01KMDX71NT --force                 # no evidence; recor
 memtrace decision reject 01KMDX71NT --reason "duplicate"
 memtrace decision revert 01KMDX71NT                         # repeal a binding decision (terminal)
 ```
+
+`memtrace decision purge` is the one irreversible verb in the product, and it
+is not a forget. `rm`, `decision reject` and `decision revert` all keep the
+decision as an audit record; purge destroys its content. It exists for one real
+case — a secret pasted into a decision body — and it asks you to type the id
+back before it runs.
+
+- A decision **with history** is *redacted*: its content is cleared, it moves
+  to a terminal state, and the row survives as a `[purged]` tombstone, because
+  its events are append-only and its id is referenced by the attribution trail.
+- A decision **with no history at all** (carried over by `migrate --from-v1`
+  and untouched since) is deleted outright, leaving a tombstone event.
+
+Purge cannot reach the v1 backup, the migration export, or any copy outside the
+store; it prints those paths and expects you to handle them. There is no MCP
+equivalent, by design.
 
 **An agent cannot dispose of a decision.** `memory_forget` over MCP records a
 `decision.disposal_requested` event and transitions nothing — "the user wanted

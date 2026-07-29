@@ -26,7 +26,7 @@ func newDecisionCmd() *cobra.Command {
 			"`proposed`: they neither bind nor pack until a human accepts them.",
 	}
 	cmd.AddCommand(newDecisionPendingCmd(), newDecisionAcceptCmd(), newDecisionRejectCmd(),
-		newDecisionRevertCmd(), newDecisionPromoteCmd())
+		newDecisionRevertCmd(), newDecisionPromoteCmd(), newDecisionPurgeCmd())
 	return cmd
 }
 
@@ -306,6 +306,107 @@ func newDecisionRevertCmd() *cobra.Command {
 			return nil
 		},
 	}
+	return cmd
+}
+
+// newDecisionPurgeCmd implements ADR-0001 Amendment 4. It is the only
+// destructive verb in the product, and everything about it is deliberate: the
+// name states the contract, the channel is human-only, the id must be typed
+// back, and what it cannot reach is printed rather than implied.
+func newDecisionPurgeCmd() *cobra.Command {
+	var reason string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "purge <id>",
+		Short: "Irreversibly remove a decision's content (e.g. a leaked secret)",
+		Long: "Purge is not forget. `rm`, `decision reject` and `decision revert` all keep " +
+			"the decision as an audit record; purge destroys its content and cannot be " +
+			"undone.\n\n" +
+			"A decision with history is redacted in place — its events are append-only and " +
+			"its id is referenced by the attribution trail, so the row survives as a " +
+			"`[purged]` tombstone. A decision with no history at all (one carried over by " +
+			"`migrate --from-v1` and untouched since) is deleted outright, leaving a " +
+			"tombstone event.\n\n" +
+			"There is no MCP equivalent, by design.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, projectRoot, err := openKernel()
+			if err != nil {
+				return err
+			}
+			defer k.Close()
+
+			id, err := resolveDecisionID(k, args[0])
+			if err != nil {
+				return err
+			}
+			d, err := k.Decisions().GetDecision(id)
+			if err != nil {
+				return err
+			}
+
+			bold := color.New(color.Bold)
+			dim := color.New(color.Faint)
+			bold.Printf("About to purge %s\n", id)
+			fmt.Printf("  %s · %s\n", d.Kind, d.Title)
+			migrationBorn, err := k.Decisions().MigrationBorn(id)
+			if err != nil {
+				return err
+			}
+			if migrationBorn {
+				color.New(color.FgRed).Printf(
+					"  This decision has no recorded history, so the row will be DELETED. " +
+						"A tombstone event records that it existed.\n")
+			} else {
+				color.New(color.FgRed).Printf(
+					"  Its content will be cleared and the decision moved to a terminal state. " +
+						"The row and its events survive as a `[purged]` tombstone.\n")
+			}
+			fmt.Println()
+			dim.Printf("This cannot be undone. Copies purge cannot reach:\n")
+			for _, r := range kernel.PurgeResidue(projectRoot) {
+				dim.Printf("  - %s\n", r)
+			}
+			fmt.Println()
+
+			// The id must be typed back. A y/n prompt is the wrong ceremony for
+			// the one irreversible action in the product: it is answered by
+			// reflex, and the cost of a mistaken keystroke here is a decision
+			// that cannot be recovered from the store.
+			if !yes {
+				fmt.Printf("Type the full id to confirm: ")
+				var typed string
+				if _, scanErr := fmt.Fscanln(cmd.InOrStdin(), &typed); scanErr != nil {
+					return fmt.Errorf("purge cancelled")
+				}
+				if strings.TrimSpace(typed) != id {
+					return fmt.Errorf("purge cancelled: %q does not match %s", typed, id)
+				}
+			}
+
+			res, err := k.Purge(id, reason, types.ActorHuman)
+			if err != nil {
+				return err
+			}
+			switch res.Arm {
+			case kernel.PurgeDeleted:
+				fmt.Printf("Purged %s — the row was deleted (%d evidence rows); "+
+					"a decision.purged event records it\n", id, res.EvidenceRows)
+			default:
+				if res.Transitioned != "" {
+					fmt.Printf("Purged %s — content cleared, decision %s\n", id, res.Transitioned)
+				} else {
+					fmt.Printf("Purged %s — content cleared\n", id)
+				}
+			}
+			dim.Printf("Handle the copies listed above yourself; the store cannot.\n")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&reason, "reason", "secret",
+		"Why it was purged: secret or cleanup (recorded in the event)")
+	cmd.Flags().BoolVar(&yes, "yes", false,
+		"Skip the typed confirmation (for scripts; the action is still irreversible)")
 	return cmd
 }
 

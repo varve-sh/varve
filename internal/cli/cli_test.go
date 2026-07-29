@@ -79,10 +79,23 @@ func setupProject(t *testing.T, memories ...types.MemorySaveInput) (*kernel.Memo
 	return k, root
 }
 
+// runCmdStdin is runCmd with something on stdin, for the commands that ask a
+// question — today only `decision purge`, whose typed confirmation is part of
+// its contract.
+func runCmdStdin(t *testing.T, stdin string, args ...string) (string, error) {
+	t.Helper()
+	return runCmdWith(t, strings.NewReader(stdin), args...)
+}
+
 // runCmd executes a root cobra command with the given args and returns stdout.
 // CLI commands use fmt.Printf directly so we redirect os.Stdout via a pipe.
 // These tests must not run in parallel (they share os.Stdout and os.Chdir).
 func runCmd(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	return runCmdWith(t, strings.NewReader(""), args...)
+}
+
+func runCmdWith(t *testing.T, stdin io.Reader, args ...string) (string, error) {
 	t.Helper()
 
 	r, w, err := os.Pipe()
@@ -102,6 +115,7 @@ func runCmd(t *testing.T, args ...string) (string, error) {
 
 	cmd := NewRootCmd()
 	cmd.SetArgs(args)
+	cmd.SetIn(stdin)
 	runErr := cmd.Execute()
 
 	w.Close()
