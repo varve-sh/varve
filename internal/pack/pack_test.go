@@ -575,3 +575,62 @@ func TestBuild_RefusesToPackAContradictionTheStoreShouldHavePrevented(t *testing
 		t.Errorf("the error must name the contested topic_key: %v", err)
 	}
 }
+
+// The packer must not inherit memory_context's F32 ordering: §P2 excludes
+// proposals from *candidacy*, and §P8's footer count is the true number of
+// scope-matching proposals — never what survived a limit. Twenty proposals
+// against a budget that fits two items is the case that would expose it.
+func TestBuild_ProposalCountIsTheTrueMatchCountNotWhatFits(t *testing.T) {
+	src := &fakeSource{
+		decisions: []types.Decision{
+			decision("01BINDING", "Handlers validate the auth header", withScope("internal/**")),
+		},
+	}
+	for i := 0; i < 20; i++ {
+		src.proposed = append(src.proposed, decision(
+			fmt.Sprintf("01PROPOSAL%016d", i), fmt.Sprintf("Proposal %d", i),
+			withScope("internal/**"), func(d *types.Decision) { d.Status = types.StatusProposed }))
+	}
+
+	res := build(t, src, Request{
+		FilePaths: []string{"internal/auth/session.go"}, BudgetTokens: MinBudget,
+	})
+
+	// The binding decision is served: proposals never competed for its slot.
+	if res.ItemCount == 0 || res.Served[0].ID != "01BINDING" {
+		t.Fatalf("the binding decision must be served, not crowded out: %+v\n%s",
+			res.Served, res.Text)
+	}
+	if res.ProposedMatched != 20 {
+		t.Errorf("proposed_matched = %d, want 20 — the count is what matched, not "+
+			"what fit", res.ProposedMatched)
+	}
+	if !strings.Contains(res.Text, "proposed decisions touching these files: 20") {
+		t.Errorf("the footer count must survive truncation intact:\n%s", res.Text)
+	}
+	// Ids may be dropped to fit the reserve; the count may not.
+	for i := 0; i < 20; i++ {
+		if strings.Contains(res.Text, "Proposal "+fmt.Sprint(i)) {
+			t.Errorf("proposal text leaked into the pack:\n%s", res.Text)
+		}
+	}
+	if got := Estimate(res.Text); got > MinBudget {
+		t.Errorf("pack is %d est-tokens over the %d floor", got, MinBudget)
+	}
+}
+
+// A pending disposal request is advisory and changes nothing: the decision is
+// still binding and still fully packable (ADR-0001 A3.1). §P8 has no marker
+// for it, and inventing one would be an ADR-0002 decision.
+func TestBuild_DisposalRequestsDoNotAffectPacking(t *testing.T) {
+	src := &fakeSource{decisions: []types.Decision{
+		decision("01REQUESTED", "Sessions are server-side only", withScope("internal/**")),
+	}}
+	res := build(t, src, Request{FilePaths: []string{"internal/auth/session.go"}})
+	if res.ItemCount != 1 {
+		t.Fatalf("served %d items, want the decision", res.ItemCount)
+	}
+	if strings.Contains(strings.ToLower(res.Text), "disposal") {
+		t.Errorf("the pack invented a disposal marker §P8 does not define:\n%s", res.Text)
+	}
+}
