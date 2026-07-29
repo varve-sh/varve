@@ -166,6 +166,16 @@ func TestPack_ServesBindingDecisionsAndRecordsThem(t *testing.T) {
 	if !found {
 		t.Error("no pack.item joins the served decision to the session")
 	}
+
+	// pack.item's agent/model are additive (§D7 lists neither) and mirror the
+	// session stamp. Pinned so they cannot drift into claiming something the
+	// session does not: ADR-0004 joins on session_id, not on these.
+	for _, ev := range items {
+		if ev.Agent != served[0].Agent || ev.Model != served[0].Model {
+			t.Errorf("pack.item provenance (%q, %q) disagrees with pack.served (%q, %q)",
+				ev.Agent, ev.Model, served[0].Agent, served[0].Model)
+		}
+	}
 }
 
 // §P10's hard requirement: per-item emission survives budget pressure. Batching

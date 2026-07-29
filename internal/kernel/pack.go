@@ -175,6 +175,13 @@ func (s *DecisionStore) recordPack(
 				"class":  string(item.Class),
 				"form":   string(item.Form),
 			}
+			// `agent`/`model` are additive here: §D7 lists only `session_id`
+			// and `decision_id` for this kind, and these mirror the session
+			// stamp every kernel event carries since F25. They are true when
+			// set and **empty for any caller without a session**, so ADR-0004
+			// must read them as convenience, never join on them — the session
+			// is the join key, and `session.started` is where §D7 puts the
+			// authoritative agent/model for a session.
 			in := EventInput{
 				ProjectID: projectID,
 				Kind:      types.EventPackItem,
