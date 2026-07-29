@@ -1,7 +1,5 @@
 package pack
 
-import "unicode/utf8"
-
 // EstimatorVersion labels the token estimate everywhere it surfaces
 // (`pack.served.payload.estimator`). ADR-0002 §P7: counts are estimates,
 // comparable within an estimator version, never ground truth — so the version
@@ -35,14 +33,5 @@ const bytesPerToken = 3
 // breached.
 func Estimate(s string) int {
 	n := len(s) // len() on a string is its UTF-8 byte length, which is what §P7 says
-	return (n + bytesPerToken - 1) / bytesPerToken
-}
-
-// EstimateRunes is Estimate for callers holding runes rather than a string.
-func EstimateRunes(r []rune) int {
-	n := 0
-	for _, c := range r {
-		n += utf8.RuneLen(c)
-	}
 	return (n + bytesPerToken - 1) / bytesPerToken
 }

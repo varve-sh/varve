@@ -29,8 +29,6 @@ type fakeSource struct {
 	timeout    bool
 	unresolved map[string]int
 	evidence   map[string][]types.Evidence
-
-	textCalls int
 }
 
 func (f *fakeSource) PackableDecisions(string) ([]types.Decision, error) { return f.decisions, nil }
@@ -38,7 +36,6 @@ func (f *fakeSource) ProposedDecisions(string) ([]types.Decision, error) { retur
 func (f *fakeSource) ActiveNotes(string) ([]types.Note, error)           { return f.notes, nil }
 
 func (f *fakeSource) TextPool(string, string, int) ([]types.FTSResult, error) {
-	f.textCalls++
 	out := make([]types.FTSResult, 0, len(f.text))
 	for id, rank := range f.text {
 		out = append(out, types.FTSResult{ID: id, Rank: rank})
@@ -556,5 +553,25 @@ Session table was denormalized in March.
 	if res.Text != golden {
 		t.Errorf("pack is not byte-identical to the golden file.\n--- got ---\n%s\n--- want ---\n%s",
 			res.Text, golden)
+	}
+}
+
+// §P5.2/§P6: two packable decisions sharing a topic_key means the store's
+// partial unique index has been bypassed. The packer asserts the invariant
+// rather than resolving it — with it broken, "the pack contains no
+// contradiction the store knows about" is a promise this call cannot keep.
+func TestBuild_RefusesToPackAContradictionTheStoreShouldHavePrevented(t *testing.T) {
+	a := decision("01AAA", "Sessions in Redis", withScope("a.go"))
+	a.TopicKey = "session-store"
+	b := decision("01BBB", "Sessions in Postgres", withScope("a.go"))
+	b.TopicKey = "session-store"
+
+	_, err := Build(&fakeSource{decisions: []types.Decision{a, b}}, "p",
+		Request{FilePaths: []string{"a.go"}, Now: fixedNow})
+	if !errors.Is(err, ErrStore) {
+		t.Fatalf("err = %v, want E4_STORE naming the corruption", err)
+	}
+	if !strings.Contains(err.Error(), "session-store") {
+		t.Errorf("the error must name the contested topic_key: %v", err)
 	}
 }

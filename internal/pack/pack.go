@@ -221,9 +221,6 @@ type candidate struct {
 	score      float64
 
 	matchedGlobs []string
-	// dedupedBy is set when P5 dropped this candidate; the footer names it.
-	dedupedBy string
-	dedupNote string
 }
 
 func (c *candidate) id() string {
@@ -366,6 +363,15 @@ func Build(src Source, projectID string, req Request) (*Result, error) {
 		return nil, err
 	}
 	res.ProposedMatched = len(proposedIDs)
+
+	// §P5.2 / §P6: at most one non-terminal decision per (project, topic_key) is
+	// a structural invariant of the store, not a packing case. The packer
+	// asserts it rather than resolving it: if two packable decisions claim the
+	// same topic, the store is corrupt and "the pack contains no contradiction
+	// the store knows about" is a promise this call cannot keep.
+	if err := assertNoContradiction(cands); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStore, err)
+	}
 
 	// --- P4: greedy selection under the budget ---
 	// The two per-decision lookups the renderer needs are fetched once, not per
