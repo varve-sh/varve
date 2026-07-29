@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -246,5 +247,35 @@ func TestSetupAgent_UnknownAgent(t *testing.T) {
 	_, err := setupAgent("notanagent", t.TempDir(), false)
 	if err == nil {
 		t.Error("expected error for unknown agent")
+	}
+}
+
+// ADR-0002 Migration §4a, ruled immediate scope by ADR-0001 Amendment 2 (A2.4).
+// Every shipped template must state three things, because the behaviour they
+// describe changed with the Phase 2 schema port and not with the packer:
+// agent-saved decisions land proposed and do not bind; fact/event are note
+// synonyms; forget maps onto the lifecycle, never a hard delete.
+//
+// ADR-0001 falsifier 1's 30-day clock starts when this ships — measuring the
+// confirm gate against agents that were never told the rule changed measures
+// template staleness, not UX friction.
+func TestInstructionTemplates_StateTheQuarantine(t *testing.T) {
+	for _, snippet := range []struct{ name, text string }{
+		{"CLAUDE.md", claudeMdSnippet},
+		{"cursor rules", cursorRulesSnippet},
+		{"copilot", copilotInstructionsSnippet},
+		{"windsurf", windsurfRulesSnippet},
+		{"gemini", geminiMdSnippet},
+	} {
+		for _, want := range []string{
+			"proposed",                 // (1) it does not bind until accepted
+			"memtrace decision accept", // and how a human accepts it
+			"synonyms for note",        // (2) fact/event are notes
+			"not a delete",             // (3) forget maps onto the lifecycle
+		} {
+			if !strings.Contains(snippet.text, want) {
+				t.Errorf("%s template does not mention %q", snippet.name, want)
+			}
+		}
 	}
 }

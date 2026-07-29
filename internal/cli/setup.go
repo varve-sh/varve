@@ -223,7 +223,19 @@ Rules:
 - Before committing — call memory_recall to check for commit conventions.
 - Learn something new — call memory_save to persist it.
 - User says forget/delete/remove — call memory_forget.
-- Never write memory files manually or use built-in memory features.`
+- Never write memory files manually or use built-in memory features.
+
+How memories are governed:
+- A decision or convention you save lands "proposed". It does NOT bind and is
+  never packed into context until a human accepts it with
+  "memtrace decision accept <id>". Tell the user a proposal is pending instead
+  of assuming your save took effect.
+- fact and event are synonyms for note: retrievable, ungoverned, no lifecycle.
+  A note cannot be edited into a decision — "memtrace decision promote <id>"
+  does that, and it is a human action.
+- Forgetting a decision is not a delete. memory_forget maps it onto the
+  lifecycle: a proposal is rejected, a binding decision is reverted, and the
+  audit record survives either way.`
 
 // claudeMdSnippet wraps the core in a CLAUDE.md section.
 const claudeMdSnippet = "\n## memtrace (memory)\n\n" + memtraceInstructionsCore + "\n"
