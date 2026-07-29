@@ -75,6 +75,7 @@ func TestHooksInstall_WritesAHookThatCannotFailACommit(t *testing.T) {
 		{"no-op without the binary on PATH", "command -v memtrace"},
 		{"runs in the background so a commit never waits", "&"},
 		{"prints nothing and exits 0", "--quiet"},
+		{"silences even a binary too old to know --quiet", ">/dev/null 2>&1 &"},
 		{"says how to recover if it is deleted", "memtrace scan"},
 	} {
 		if !strings.Contains(hook, want.text) {
@@ -355,5 +356,36 @@ func TestInitCmd_RecordsTheObservationEpoch(t *testing.T) {
 	epoch, err := k.ObserverEpoch()
 	if err != nil || epoch == nil {
 		t.Fatalf("no observation epoch after init: %v, %v", epoch, err)
+	}
+}
+
+// `init` must keep the store out of the repository even when there is no
+// .gitignore yet: a committed database makes `git revert` and `git checkout`
+// fail on a file the user never edited.
+func TestInitCmd_CreatesAGitignoreWhenThereIsNone(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	if out, err := runCmd(t, "init", "--no-import"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatalf("no .gitignore created: %v", err)
+	}
+	if !strings.Contains(string(body), ".memtrace") {
+		t.Errorf(".gitignore does not exclude the store:\n%s", body)
 	}
 }

@@ -21,7 +21,13 @@ import (
 // forces exit 0, so the hook can neither fail nor speak. The comment names the
 // recovery path, because a hook a user cannot safely delete is a hook they
 // will delete angrily.
-const hookLine = `command -v memtrace >/dev/null 2>&1 && memtrace observe --commit HEAD --quiet &`
+//
+// The output redirection is not belt-and-braces: found by running this against
+// a machine with an *older* memtrace on PATH, which does not know the
+// `observe` subcommand and printed a cobra usage error into the middle of a
+// commit. `--quiet` can only silence a binary that understands it, so §D7's
+// "never prints" has to be structural.
+const hookLine = `command -v memtrace >/dev/null 2>&1 && memtrace observe --commit HEAD --quiet >/dev/null 2>&1 &`
 
 const hookHeader = "# installed by memtrace — safe to delete; `memtrace scan` recovers missed commits"
 

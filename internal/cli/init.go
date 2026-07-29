@@ -127,7 +127,15 @@ func addToGitignore(projectRoot string) {
 	gitignorePath := filepath.Join(projectRoot, ".gitignore")
 	data, err := os.ReadFile(gitignorePath)
 	if err != nil {
-		return // .gitignore doesn't exist, skip
+		// No .gitignore: create one. Skipping used to look harmless and is not
+		// — the store lands in the repository, and once committed it makes
+		// `git revert` and `git checkout` fail with "local changes would be
+		// overwritten" on a file the user never edited. Found by running the
+		// observer end to end in a fresh repository.
+		if os.IsNotExist(err) {
+			_ = os.WriteFile(gitignorePath, []byte(".memtrace/\n"), 0o644)
+		}
+		return
 	}
 	if strings.Contains(string(data), ".memtrace") {
 		return // already present
