@@ -309,3 +309,47 @@ func TestDecisionAcceptCmd_RefusesToAcceptTwice(t *testing.T) {
 		t.Errorf("%d decision.accepted events, want 1", len(accepted))
 	}
 }
+
+// F23. Evidence was attached in its own transaction before the acceptance
+// could succeed, so a repeat leaked `UNIQUE constraint failed: ...(2067)` —
+// the raw-constraint-abort class the ADRs legislate against by name — and a
+// failed acceptance left rows the user did not get the decision for.
+func TestDecisionAcceptCmd_EvidenceIsCheckedBeforeItIsWritten(t *testing.T) {
+	k, _ := proposedProject(t)
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	id := ds[0].ID
+
+	// Duplicate evidence is benign: the row is already there, so the acceptance
+	// proceeds and no constraint abort reaches the user.
+	if _, err := k.Decisions().AddEvidence(id, kernel.EvidenceInput{
+		Kind: types.EvidenceKindCommit, Ref: "9f2c1ab", AddedBy: types.ActorHuman,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCmd(t, "decision", "accept", id[:12], "--evidence", "commit:9f2c1ab")
+	if err != nil {
+		t.Fatalf("a duplicate --evidence must not fail the acceptance: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "UNIQUE constraint") {
+		t.Errorf("a raw constraint abort reached the user:\n%s", out)
+	}
+	if !strings.Contains(out, "already attached") {
+		t.Errorf("the duplicate was not reported:\n%s", out)
+	}
+	if ev, _ := k.Decisions().Evidence(id); len(ev) != 1 {
+		t.Errorf("evidence = %d rows, want 1", len(ev))
+	}
+
+	// A decision that cannot be accepted must not collect evidence on the way
+	// to being told so.
+	out, err = runCmd(t, "decision", "accept", id[:12], "--evidence", "commit:deadbee")
+	if err == nil {
+		t.Fatalf("accepting an active decision must refuse, got: %s", out)
+	}
+	ev, _ := k.Decisions().Evidence(id)
+	for _, e := range ev {
+		if e.Ref == "deadbee" {
+			t.Error("evidence was attached to a decision the command then refused to accept")
+		}
+	}
+}

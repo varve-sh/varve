@@ -98,13 +98,39 @@ func newDecisionAcceptCmd() *cobra.Command {
 				return err
 			}
 
+			// Parse every --evidence value, and check the decision can actually be
+			// accepted, *before* writing anything. Attaching first meant a failed
+			// acceptance left evidence rows the user did not get the decision for,
+			// and `accept <terminal-id> --evidence …` attached evidence to a
+			// terminal decision and only then reported the illegal transition
+			// (F23).
+			inputs := make([]kernel.EvidenceInput, 0, len(evidence))
 			for _, spec := range evidence {
 				in, parseErr := parseEvidence(spec)
 				if parseErr != nil {
 					return parseErr
 				}
-				if _, addErr := k.Decisions().AddEvidence(id, in); addErr != nil {
-					return fmt.Errorf("attaching evidence %q: %w", spec, addErr)
+				inputs = append(inputs, in)
+			}
+			current, err := k.Decisions().GetDecision(id)
+			if err != nil {
+				return err
+			}
+			if current.Status != types.StatusProposed {
+				return notProposedError(id, current.Status)
+			}
+
+			for i, in := range inputs {
+				_, addErr := k.Decisions().AddEvidence(id, in)
+				// A duplicate is the benign case — the row the user asked for is
+				// already attached — so it is reported and the acceptance
+				// continues, rather than surfacing a constraint abort.
+				if errors.Is(addErr, types.ErrDuplicateEvidence) {
+					color.New(color.Faint).Printf("  %s (already attached)\n", evidence[i])
+					continue
+				}
+				if addErr != nil {
+					return fmt.Errorf("attaching evidence %q: %w", evidence[i], addErr)
 				}
 			}
 
@@ -118,19 +144,7 @@ func newDecisionAcceptCmd() *cobra.Command {
 			}
 			var illegal *types.IllegalTransitionError
 			if errors.As(err, &illegal) {
-				// Acceptance is the proposed→active edge only. Re-accepting is not
-				// idempotent-and-harmless: it would re-promote evidence attached
-				// since (§D4), so it is refused with the reason (F19).
-				switch illegal.From {
-				case types.StatusActive:
-					return fmt.Errorf("decision %s is already active; it can only be accepted once, "+
-						"and re-accepting would promote evidence attached since to accepting evidence", id)
-				case types.StatusViolated:
-					return fmt.Errorf("decision %s is violated, and still binding; it returns to active "+
-						"when its violations are resolved, not by being accepted again", id)
-				default:
-					return fmt.Errorf("decision %s is %s — only a proposal can be accepted", id, illegal.From)
-				}
+				return notProposedError(id, illegal.From)
 			}
 			if err != nil {
 				return err
@@ -233,6 +247,22 @@ func newDecisionPromoteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&scope, "scope", "",
 		"Comma-separated file globs (default: the note's file paths, verbatim)")
 	return cmd
+}
+
+// notProposedError explains why a non-proposal cannot be accepted. Acceptance
+// is the proposed→active edge only: re-accepting is not idempotent-and-
+// harmless, it would re-promote evidence attached since (§D4, F19).
+func notProposedError(id string, status types.DecisionStatus) error {
+	switch status {
+	case types.StatusActive:
+		return fmt.Errorf("decision %s is already active; it can only be accepted once, "+
+			"and re-accepting would promote evidence attached since to accepting evidence", id)
+	case types.StatusViolated:
+		return fmt.Errorf("decision %s is violated, and still binding; it returns to active "+
+			"when its violations are resolved, not by being accepted again", id)
+	default:
+		return fmt.Errorf("decision %s is %s — only a proposal can be accepted", id, status)
+	}
 }
 
 // parseEvidence parses a "kind:ref" flag value. The kind is required and

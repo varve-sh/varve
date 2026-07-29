@@ -40,6 +40,27 @@ var (
 	ErrViolationAlreadyResolved = errors.New("that violation episode is already resolved")
 )
 
+// ErrDuplicateEvidence is returned when the same (decision, kind, ref) is
+// attached twice. idx_evidence_dedupe already prevents it; this makes the
+// refusal a typed, actionable error instead of a raw SQLite constraint abort
+// reaching the user — the class ADR-0001 Amendment 1 legislates against by
+// name ("never a raw constraint abort"). Duplicate evidence is the benign
+// case: the row the caller wanted is already there.
+var ErrDuplicateEvidence = errors.New("this evidence is already attached to the decision")
+
+// DuplicateEvidenceError names the row that already exists.
+type DuplicateEvidenceError struct {
+	DecisionID string
+	Kind       EvidenceKind
+	Ref        string
+}
+
+func (e *DuplicateEvidenceError) Error() string {
+	return string(e.Kind) + " evidence " + e.Ref + " is already attached to decision " + e.DecisionID
+}
+
+func (e *DuplicateEvidenceError) Unwrap() error { return ErrDuplicateEvidence }
+
 // ErrTopicKeyHeld is returned when a proposal's claimed topic_key is held by a
 // non-terminal decision the proposal does not supersede (ADR-0001 Amendment 1,
 // D5). The whole acceptance fails rather than silently dropping the key:

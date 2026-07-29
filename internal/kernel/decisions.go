@@ -1175,6 +1175,21 @@ func (s *DecisionStore) AddEvidence(decisionID string, in EvidenceInput) (*types
 		if err != nil {
 			return err
 		}
+		// idx_evidence_dedupe would abort with a raw SQLite constraint error,
+		// which is what the ADRs' typed-error rule exists to keep away from the
+		// caller. Checked here so the refusal names the row (F23).
+		var existing int
+		if err := tx.QueryRow(`
+			SELECT COUNT(*) FROM evidence
+			 WHERE decision_id = ? AND kind = ? AND ref = ?`,
+			decisionID, string(in.Kind), in.Ref).Scan(&existing); err != nil {
+			return err
+		}
+		if existing > 0 {
+			return &types.DuplicateEvidenceError{
+				DecisionID: decisionID, Kind: in.Kind, Ref: in.Ref,
+			}
+		}
 		ev, err := insertEvidence(tx, decisionID, in, false, time.Now().UTC())
 		if err != nil {
 			return err
