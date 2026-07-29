@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/memtrace-dev/memtrace/internal/kernel"
+	"github.com/memtrace-dev/memtrace/internal/pack"
 	"github.com/memtrace-dev/memtrace/internal/types"
 )
 
@@ -356,7 +357,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 	// Tool 5: memory_context
 	s.AddTool(
 		mcp.NewTool("memory_context",
-			mcp.WithDescription("Get all memories relevant to a set of files you are about to read or edit. Call this at the start of any task that touches specific files to surface conventions, decisions, and facts linked to those files."),
+			mcp.WithDescription("Get all memories relevant to a set of files you are about to read or edit. Call this at the start of any task that touches specific files to surface conventions, decisions, and notes linked to those files. Everything returned here is binding or ungoverned context: proposed decisions are never included as content — they are reported only as a trailing count with their ids, and a human accepts them before they apply. Use memory_recall or memory_get to read a proposal."),
 			mcp.WithArray("file_paths",
 				mcp.Required(),
 				mcp.Description(`Files you are about to work with, relative to project root, e.g. ["src/auth/middleware.go", "src/auth/handler.go"]`),
@@ -383,6 +384,8 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			if len(results) == 0 {
 				return mcp.NewToolResultText("No relevant memories found for these files."), nil
 			}
+			// (Proposals are filtered below, so a result set that is *only*
+			// proposals still reports them — as a count, never as content.)
 
 			var buf strings.Builder
 			fmt.Fprintf(&buf, "Context for %d file(s):\n", len(filePaths))
@@ -390,6 +393,24 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 				fmt.Fprintf(&buf, "  %s\n", p)
 			}
 			buf.WriteString("\n")
+
+			// memory_context *volunteers* context at task start, so it gives
+			// §P2's structural guarantee rather than the advisory marker
+			// memory_recall and memory_get give (ADR-0002 Amendment 2): a
+			// proposed decision — unconfirmed text, often the agent's own — never
+			// appears as content here, only as a footer count. An inline caveat
+			// inside content the agent was just handed is the precise laundering
+			// §P2's rationale names.
+			var proposedIDs []string
+			served := results[:0]
+			for _, r := range results {
+				if r.Memory.Status == types.MemoryStatus(types.StatusProposed) {
+					proposedIDs = append(proposedIDs, r.Memory.ID)
+					continue
+				}
+				served = append(served, r)
+			}
+			results = served
 
 			for i, r := range results {
 				m := r.Memory
@@ -409,6 +430,15 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 					buf.WriteString("\n\n")
 				}
 			}
+			if footer := pack.ProposedFooter(proposedIDs, 0); footer != "" {
+				if len(results) > 0 {
+					buf.WriteString("\n")
+				}
+				buf.WriteString("\n" + footer)
+			}
+			// No pack events are emitted here: ADR-0002 OQ5's instrumentation
+			// gap is accepted and adopting §P2's footer must not quietly grow
+			// §P10 emission.
 			buf.WriteString("\n\nCall memory_get with an ID to read the full content.")
 			return mcp.NewToolResultText(buf.String()), nil
 		},

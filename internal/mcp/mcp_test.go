@@ -860,12 +860,18 @@ func TestMemoryPromptTool_WithFilePaths(t *testing.T) {
 	}
 }
 
-// F20. §D10: "Decisions surface with their status." The agent-facing tools
-// rendered a `proposed` decision — the agent's own unreviewed write, held in
-// quarantine by design — identically to an accepted, binding one, so a
-// proposal saved in one session came back in the next as law. That is
-// ADR-0002 §P2's laundering, on the two read paths that exist today.
-func TestMCPReadPaths_MarkProposedDecisions(t *testing.T) {
+// F20 + ADR-0002 Amendment 2. The volunteering/answering boundary, asserted on
+// both sides:
+//
+//   - `memory_recall` and `memory_get` *answer explicit queries*. They are the
+//     review surface — §D10 names proposals visible in recall, and a proposal
+//     that cannot be found cannot be accepted or disposed of — so they return
+//     proposals carrying the advisory PROPOSED marker, permanently.
+//   - `memory_context` *volunteers* context at task start, so it gives §P2's
+//     structural guarantee instead: a proposed decision never appears as
+//     content, only as a footer count. An inline caveat inside content the
+//     agent was just handed is the precise laundering §P2's rationale names.
+func TestMCPReadPaths_VolunteeringVersusAnswering(t *testing.T) {
 	s, k := setupServer(t)
 
 	// An agent-saved decision: proposed, by D2.
@@ -887,38 +893,47 @@ func TestMCPReadPaths_MarkProposedDecisions(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	for _, probe := range []struct {
-		name string
-		args map[string]interface{}
-	}{
-		{"memory_recall", map[string]interface{}{"query": "handlers"}},
-		{"memory_context", map[string]interface{}{"file_paths": []interface{}{"internal/api/users.go"}}},
-	} {
-		out := resultText(t, callTool(t, s, probe.name, probe.args))
-		if !strings.Contains(out, "Handlers must not log secrets.") {
-			t.Fatalf("%s did not return the proposal at all:\n%s", probe.name, out)
-		}
-		if !strings.Contains(out, "PROPOSED") {
-			t.Errorf("%s renders a proposed decision as binding — the agent cannot "+
-				"tell it from an accepted one:\n%s", probe.name, out)
-		}
-		if strings.Count(out, "PROPOSED") != 1 {
-			t.Errorf("%s marked %d rows PROPOSED, want exactly the proposal:\n%s",
-				probe.name, strings.Count(out, "PROPOSED"), out)
-		}
-	}
-
-	// memory_get too — it is how the agent reads the full text before acting.
 	ds, err := k.Decisions().ListDecisions(kernel.DecisionFilter{
 		Statuses: []types.DecisionStatus{types.StatusProposed},
 	})
 	if err != nil || len(ds) != 1 {
 		t.Fatalf("expected one proposal, got %d (%v)", len(ds), err)
 	}
-	out := resultText(t, callTool(t, s, "memory_get", map[string]interface{}{"id": ds[0].ID}))
+	proposalID := ds[0].ID
+
+	// --- answering: the marker, and the content ---
+	out := resultText(t, callTool(t, s, "memory_recall", map[string]interface{}{"query": "handlers"}))
+	if !strings.Contains(out, "Handlers must not log secrets.") {
+		t.Fatalf("memory_recall must remain the review surface:\n%s", out)
+	}
+	if strings.Count(out, "PROPOSED") != 1 {
+		t.Errorf("memory_recall marked %d rows PROPOSED, want exactly the proposal:\n%s",
+			strings.Count(out, "PROPOSED"), out)
+	}
+	out = resultText(t, callTool(t, s, "memory_get", map[string]interface{}{"id": proposalID}))
 	if !strings.Contains(out, "PROPOSED") {
 		t.Errorf("memory_get drops the status:\n%s", out)
+	}
+
+	// --- volunteering: the guarantee, and only a count ---
+	out = resultText(t, callTool(t, s, "memory_context", map[string]interface{}{
+		"file_paths": []interface{}{"internal/api/users.go"},
+	}))
+	if strings.Contains(out, "Handlers must not log secrets.") {
+		t.Errorf("memory_context volunteered unconfirmed text as content:\n%s", out)
+	}
+	if strings.Contains(out, proposalID) && !strings.Contains(out, "proposed decisions touching") {
+		t.Errorf("the proposal id appears outside the footer:\n%s", out)
+	}
+	if !strings.Contains(out, "proposed decisions touching these files: 1") {
+		t.Errorf("memory_context dropped the proposal silently; it must be counted:\n%s", out)
+	}
+	if !strings.Contains(out, "decision accept") {
+		t.Errorf("the footer does not say how to act on it:\n%s", out)
+	}
+	// The accepted decision is still served in full.
+	if !strings.Contains(out, "Handlers return wrapped errors.") {
+		t.Errorf("memory_context dropped a binding convention:\n%s", out)
 	}
 }
 

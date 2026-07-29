@@ -20,12 +20,21 @@ memory_save(
 
 **Decisions and conventions are governed.** One saved over MCP lands
 `proposed`: it is captured, but it does not bind until a human accepts it
-(`memtrace decision accept <id>`), and it is never served as binding context.
-It can still be returned by `memory_recall` and `memory_context`, where it is
-marked `PROPOSED (not accepted by a human; does not bind)` — treat anything so
-marked as a pending proposal rather than as law. Surface pending proposals to
-the user instead of assuming the save took effect. Acceptance and rejection are
-CLI/TUI actions — there is no MCP tool for them, by design.
+(`memtrace decision accept <id>`), and it is never volunteered as context.
+
+Which tool you call decides how you see it:
+
+- `memory_recall` and `memory_get` **answer what you asked** and return
+  proposals, marked `PROPOSED (not accepted by a human; does not bind)`. This
+  is the review surface — treat anything so marked as a pending proposal
+  rather than as law.
+- `memory_context` **volunteers** context at task start, so it never returns a
+  proposal as content. Proposals appear only as a trailing count with their
+  ids, which you can look up with `memory_get` if you need them.
+
+Surface pending proposals to the user instead of assuming the save took effect.
+Acceptance, rejection and disposal are CLI/TUI actions — there is no MCP tool
+for them, by design.
 
 **Parameters**
 
