@@ -288,6 +288,11 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 	// successor becomes a *note* has no decision to point at, so it takes
 	// §D9's other branch — `rejected` — and must never enter the `proposed`
 	// staging status, or an archived decision comes back as a live proposal.
+	// One timestamp for the whole conversion: every row whose status the
+	// mapping changes is recorded as having changed status now, and they all
+	// changed at the same moment.
+	migratedAt := time.Now().UTC()
+
 	willBeDecision := make(map[string]bool, len(rows))
 	for i := range rows {
 		switch rows[i].Type {
@@ -303,7 +308,8 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 		}
 		switch m.Type {
 		case types.MemoryTypeDecision, types.MemoryTypeConvention:
-			n, skipped, err := insertMigratedDecision(tx, m, embeddings[m.ID], willBeDecision, supersessions, report)
+			n, skipped, err := insertMigratedDecision(tx, m, embeddings[m.ID],
+				willBeDecision, supersessions, report, migratedAt)
 			if err != nil {
 				return nil, err
 			}
@@ -346,7 +352,7 @@ func reimport(db *sql.DB, rows []types.Memory, embeddings map[string]string, opt
 	// staging status is `proposed`, which is non-terminal, so every row entered
 	// here must leave here — a row left staged is an archived decision
 	// resurrected as a live proposal.
-	now := time.Now().UTC()
+	now := migratedAt
 	for id, successor := range supersessions {
 		var n int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM decisions WHERE id = ?`, successor).Scan(&n); err != nil {
@@ -453,6 +459,7 @@ func mapKeys(m map[string]string) []string {
 func insertMigratedDecision(
 	tx *sql.Tx, m *types.Memory, storedEmbedding string,
 	willBeDecision map[string]bool, supersessions map[string]string, report *MigrationReport,
+	migratedAt time.Time,
 ) (int, *SkippedRow, error) {
 	title := strings.TrimSpace(m.Summary)
 	if title == "" {
@@ -510,6 +517,26 @@ func insertMigratedDecision(
 	if status == types.StatusActive {
 		decidedAt = fmtTime(m.CreatedAt)
 	}
+
+	// `status_changed_at` is migration time for every row whose status the
+	// mapping itself changed — that is when the status actually changed
+	// (ADR-0001 Amendment 4, D9 amended).
+	//
+	// Carrying v1's `updated_at` onto a `stale → proposed` row made falsifier 1
+	// fire on migration day: it counts proposed rows "older than 14 days with
+	// no accept/reject action", so a migrated backlog with v1 timestamps
+	// indicts the human-confirm gate for staleness that predates the gate's
+	// existence — a kill metric producing a false positive against our own
+	// product on day one. Only status-verbatim rows (`active → active`) keep
+	// the v1 timestamp, because for those the claim is true.
+	//
+	// The migrated backlog is still visible: it is linter L7's finding, where
+	// flagging it is the desired behaviour rather than an indictment of a gate
+	// it never passed through.
+	statusChangedAt := fmtTime(m.UpdatedAt)
+	if m.Status != types.MemoryStatusActive {
+		statusChangedAt = fmtTime(migratedAt)
+	}
 	var embedding any
 	// v1 embeddings stay valid: the content is carried over unchanged (§D9).
 	if storedEmbedding != "" {
@@ -524,7 +551,7 @@ func insertMigratedDecision(
 		nullableString(m.SourceRef), nil, nil, nil,
 		nil, nullableString(m.TopicKey), mustJSON(nonNilStrings(m.Tags)),
 		"[]", nil, embedding,
-		fmtTime(m.CreatedAt), fmtTime(m.UpdatedAt), decidedAt, fmtTime(m.UpdatedAt),
+		fmtTime(m.CreatedAt), fmtTime(m.UpdatedAt), decidedAt, statusChangedAt,
 		nullableTime(m.AccessedAt), m.AccessCount,
 		nil, // pending_topic_key: v1 has no deferred keys to carry
 	); err != nil {

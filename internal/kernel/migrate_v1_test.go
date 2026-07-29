@@ -610,3 +610,96 @@ func TestMigrateFromV1_CountCheckFiresOnALossyReimport(t *testing.T) {
 		t.Errorf("reimported %d rows, want %d", report.Decisions+report.Notes, len(rows))
 	}
 }
+
+// ADR-0001 Amendment 4, audit item 1 — the most consequential item in it.
+//
+// §D9 carried v1's `updated_at` into `status_changed_at`, so a v1 `stale`
+// decision arrived as a `proposed` row timestamped months ago. Falsifier 1
+// counts proposed rows "older than 14 days with no accept/reject action": a
+// migrated backlog therefore fires it on migration day, indicting the
+// human-confirm gate for staleness that predates the gate's existence. A kill
+// metric producing a false positive against our own product, on day one.
+//
+// Rows whose status the mapping *changed* now carry migration time — that is
+// when the status changed. Rows carried over verbatim keep the v1 timestamp,
+// because for those the claim is true.
+func TestMigrateFromV1_StatusChangedAtReflectsWhenTheStatusChanged(t *testing.T) {
+	path, rows := populatedV1DB(t)
+	start := time.Now().UTC().Add(-time.Minute)
+
+	if _, migErr := MigrateFromV1(MigrateV1Options{DBPath: path, ProjectID: testProject}); migErr != nil {
+		t.Fatalf("MigrateFromV1: %v", migErr)
+	}
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := ApplySchema(db); err != nil {
+		t.Fatalf("the migrated database must open as v2: %v", err)
+	}
+
+	for _, r := range rows {
+		if r.memType != types.MemoryTypeDecision && r.memType != types.MemoryTypeConvention {
+			continue
+		}
+		var status, changed string
+		if err := db.QueryRow(
+			`SELECT status, status_changed_at FROM decisions WHERE id = ?`, r.id).
+			Scan(&status, &changed); err != nil {
+			t.Fatalf("%s: %v", r.id, err)
+		}
+		ts, err := time.Parse(time.RFC3339Nano, changed)
+		if err != nil {
+			t.Fatalf("%s: unparseable status_changed_at %q", r.id, changed)
+		}
+		statusUnchanged := r.status == types.MemoryStatusActive
+		if statusUnchanged && !ts.Before(start) {
+			t.Errorf("%s (v1 %s -> %s): status_changed_at = %s, want the v1 timestamp — "+
+				"this row's status was carried over verbatim", r.id, r.status, status, changed)
+		}
+		if !statusUnchanged && ts.Before(start) {
+			t.Errorf("%s (v1 %s -> %s): status_changed_at = %s, want migration time — "+
+				"the mapping changed this row's status, and falsifier 1 measures age "+
+				"from here", r.id, r.status, status, changed)
+		}
+	}
+
+	// Falsifier 1's own query against the migrated store: with the I1
+	// exclusion it must find nothing to indict, and without the timestamp fix
+	// the migrated backlog would be sitting there either way.
+	var flagged int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM decisions d
+		 WHERE d.status = 'proposed'
+		   AND d.status_changed_at < ?
+		   AND EXISTS (SELECT 1 FROM events e
+		                WHERE e.decision_id = d.id
+		                  AND e.kind IN ('decision.proposed','decision.accepted'))`,
+		time.Now().UTC().Add(-14*24*time.Hour).Format(time.RFC3339Nano)).Scan(&flagged); err != nil {
+		t.Fatal(err)
+	}
+	if flagged != 0 {
+		t.Errorf("falsifier 1 counts %d migrated rows; it must count none of them "+
+			"(migration-born rows are excluded by the I1 predicate)", flagged)
+	}
+
+	// Falsifier 4's corrected query, same store: v1 rows without file_paths
+	// arrive with an empty scope, and counting them would falsify the glob bet
+	// on v1 data-entry habits.
+	var globFalsified bool
+	if err := db.QueryRow(`
+		SELECT COALESCE(SUM(json_array_length(scope) = 0) * 2 > COUNT(*), 0)
+		  FROM decisions d
+		 WHERE kind = 'decision' AND status IN ('active','violated')
+		   AND EXISTS (SELECT 1 FROM events e
+		                WHERE e.decision_id = d.id
+		                  AND e.kind IN ('decision.proposed','decision.accepted'))`,
+	).Scan(&globFalsified); err != nil {
+		t.Fatal(err)
+	}
+	if globFalsified {
+		t.Error("falsifier 4 fired on a freshly migrated store; migration-born rows " +
+			"must be excluded (their scope is v1 file_paths verbatim)")
+	}
+}
