@@ -173,11 +173,18 @@ func (r *Report) Markdown() string {
 		case c.NA:
 			fmt.Fprintf(&b, "_not applicable: %s_\n\n", c.NAReason)
 			continue
-		case len(c.Findings) == 0:
+		case len(c.Findings) == 0 && len(c.Candidates) == 0 && len(c.Hubs) == 0:
 			fmt.Fprintf(&b, "_no findings (%d checked)_\n\n", c.Checked)
 			continue
+		case len(c.Findings) == 0:
+			// Unscored candidates without scored findings: "no findings" alone
+			// would be a lie of omission on exactly the corpora where L6's
+			// unscored tier is the whole output (F52). Fall through so the
+			// candidate list and the `misses` disclosure both reach the page.
+			fmt.Fprintf(&b, "_no scored findings (%d checked)_\n\n", c.Checked)
+		default:
+			fmt.Fprintf(&b, "%d of %d checked\n\n", len(c.Findings), c.Checked)
 		}
-		fmt.Fprintf(&b, "%d of %d checked\n\n", len(c.Findings), c.Checked)
 		for _, f := range c.Findings {
 			line := "- `" + f.ID + "`"
 			if f.Title != "" {
@@ -190,6 +197,18 @@ func (r *Report) Markdown() string {
 				line += " (" + f.SourceRef + ")"
 			}
 			b.WriteString(line + "\n")
+		}
+		// Unscored review candidates, labelled as such on every surface that
+		// renders them (ADR-0005 Amendment 2). The count is never dropped.
+		if len(c.Hubs) > 0 || len(c.Candidates) > 0 {
+			fmt.Fprintf(&b, "\n%d unscored review candidate(s) — listed, not counted against the score:\n\n",
+				len(c.Hubs)+len(c.Candidates))
+			for _, f := range c.Hubs {
+				b.WriteString("- " + f.Detail + "\n")
+			}
+			for _, f := range c.Candidates {
+				b.WriteString("- `" + f.ID + "` " + f.Detail + "\n")
+			}
 		}
 		if c.Misses != "" {
 			fmt.Fprintf(&b, "\n_misses: %s_\n", c.Misses)

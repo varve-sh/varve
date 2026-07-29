@@ -527,6 +527,14 @@ func TestL3_NoCommitsIsNotAFindingOfDeadCommits(t *testing.T) {
 // from decisions merely *about* a file is assigned by the importer rather than
 // the user. These four cases pin both sides of the boundary so a future
 // re-entry has to move them deliberately.
+// amendment2Store seeds a store that is ABOVE MinScorableEntries before the
+// case under test adds anything.
+//
+// F51: at n<10 computeScore returns before the penalty loop, so a
+// "zero deduction" assertion passes because nothing was scored at all — the
+// branch's recurring defect (assertion right, fixture cannot reach the
+// failure) landing on the clause meant to guard the score. The padding is
+// notes, so it moves the entry count without touching L6's population.
 func amendment2Store(t *testing.T) *sql.DB {
 	t.Helper()
 	k := kernel.New(filepath.Join(t.TempDir(), "a2.db"), project)
@@ -534,17 +542,45 @@ func amendment2Store(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k.Close() })
-	return k.Decisions().DB()
+	db := k.Decisions().DB()
+	now := ts(time.Now().UTC())
+	for i := 0; i < 12; i++ {
+		if _, err := db.Exec(`INSERT INTO notes (id, project_id, content, status, created_at, updated_at)
+			VALUES (?,?,?, 'active', ?, ?)`,
+			"pad"+itoa(i), project, "padding note "+itoa(i), now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return db
 }
 
-func insertDecision(t *testing.T, db *sql.DB, id, kind, title, body, scope string) {
+// assertScorable guards the guard: if a case's store ever slips back below the
+// suppression floor, its zero-deduction assertion becomes vacuous again.
+func assertScorable(t *testing.T, res *Result) {
+	t.Helper()
+	if res.Score.Suppressed {
+		t.Fatalf("fixture is below the n=%d floor (%d entries), so a zero-deduction "+
+			"assertion cannot fail — see F51", MinScorableEntries, res.Score.Entries)
+	}
+}
+
+// insertDecision takes topicKey explicitly: F53 showed a `topic_key` gate on
+// the candidate list — the literal contradiction of Amendment 2's
+// presentation-order-not-a-gate finding — surviving the suite because every
+// fixture row had an empty key. Cases below deliberately mix keyed and
+// unkeyed rows so a gate has something to exclude.
+func insertDecision(t *testing.T, db *sql.DB, id, kind, title, body, scope, topicKey string) {
 	t.Helper()
 	now := ts(time.Now().UTC())
+	var tk any
+	if topicKey != "" {
+		tk = topicKey
+	}
 	_, err := db.Exec(`INSERT INTO decisions
-		(id, project_id, kind, title, body, status, scope,
+		(id, project_id, kind, title, body, status, scope, topic_key,
 		 created_at, updated_at, decided_at, status_changed_at)
-		VALUES (?,?,?,?,?, 'active', ?,?,?,?,?)`,
-		id, project, kind, title, body, scope, now, now, now, now)
+		VALUES (?,?,?,?,?, 'active', ?,?,?,?,?,?)`,
+		id, project, kind, title, body, scope, tk, now, now, now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,13 +591,18 @@ func insertDecision(t *testing.T, db *sql.DB, id, kind, title, body, scope strin
 func TestL6_NineSharersCollapseToAHubAndCostNothing(t *testing.T) {
 	db := amendment2Store(t)
 	for i := 0; i < 9; i++ {
+		key := ""
+		if i%2 == 0 {
+			key = "log-fact-" + itoa(i)
+		}
 		insertDecision(t, db, "h"+itoa(i), "decision",
-			"Fact about the log "+itoa(i), "body "+itoa(i), `["planning/decisions-log.md"]`)
+			"Fact about the log "+itoa(i), "body "+itoa(i), `["planning/decisions-log.md"]`, key)
 	}
 	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertScorable(t, res)
 	c := mustCheck(t, res, "L6")
 	if len(c.Findings) != 0 {
 		t.Errorf("nine sharers produced %d scored findings, want 0 — a hub is not a conflict", len(c.Findings))
@@ -584,13 +625,18 @@ func TestL6_NineSharersCollapseToAHubAndCostNothing(t *testing.T) {
 func TestL6_ThreeSharersAreUnscoredCandidates(t *testing.T) {
 	db := amendment2Store(t)
 	for i := 0; i < 3; i++ {
+		key := ""
+		if i == 0 {
+			key = "spec-note"
+		}
 		insertDecision(t, db, "s"+itoa(i), "decision",
-			"Note on the spec "+itoa(i), "body "+itoa(i), `["docs/spec.md"]`)
+			"Note on the spec "+itoa(i), "body "+itoa(i), `["docs/spec.md"]`, key)
 	}
 	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertScorable(t, res)
 	c := mustCheck(t, res, "L6")
 	if len(c.Findings) != 0 {
 		t.Errorf("three sharers produced %d scored findings, want 0", len(c.Findings))
@@ -612,8 +658,8 @@ func TestL6_ThreeSharersAreUnscoredCandidates(t *testing.T) {
 // a strong prior on any corpus shape, which is why it kept the arithmetic.
 func TestL6_TitleCollisionStillScores(t *testing.T) {
 	db := amendment2Store(t)
-	insertDecision(t, db, "t1", "convention", "Use pnpm", "npm lockfiles drift", `["a/*.go"]`)
-	insertDecision(t, db, "t2", "convention", "use   PNPM", "yarn is fine actually", `["b/*.go"]`)
+	insertDecision(t, db, "t1", "convention", "Use pnpm", "npm lockfiles drift", `["a/*.go"]`, "pkgmgr")
+	insertDecision(t, db, "t2", "convention", "use   PNPM", "yarn is fine actually", `["b/*.go"]`, "")
 	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
@@ -633,8 +679,8 @@ func TestL6_TitleCollisionStillScores(t *testing.T) {
 // be able to see that shared-scope candidates exist and did not move the score.
 func TestL6_MethodLineDisclosesTheUnscoredTier(t *testing.T) {
 	db := amendment2Store(t)
-	insertDecision(t, db, "m1", "decision", "One", "a", `["x/*.go"]`)
-	insertDecision(t, db, "m2", "decision", "Two", "b", `["x/*.go"]`)
+	insertDecision(t, db, "m1", "decision", "One", "a", `["x/*.go"]`, "")
+	insertDecision(t, db, "m2", "decision", "Two", "b", `["x/*.go"]`, "")
 	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
@@ -642,5 +688,84 @@ func TestL6_MethodLineDisclosesTheUnscoredTier(t *testing.T) {
 	const want = "title collisions scored; shared-scope candidates listed unscored (calibration pending)"
 	if got := res.Modes["contradictions"]; got != want {
 		t.Fatalf("method line = %q, want %q", got, want)
+	}
+}
+
+// F53: the hub boundary was pinned from below only — any threshold from 4 to 9
+// passed, because the cases sat at 3 and 9. This closes it from above, so
+// moving hubShareThreshold in either direction fails a test.
+func TestL6_HubBoundaryIsClosedFromBothSides(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		sharers     int
+		wantHubs    int
+		wantCandPrs int
+	}{
+		// Literal counts, deliberately NOT hubShareThreshold: parameterising the
+		// input by the constant under test makes the assertion move with it,
+		// which is how the boundary stayed unpinned in the first place.
+		{"three sharers stay pairs", 3, 0, 3},
+		{"exactly four collapse to a hub", 4, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := amendment2Store(t)
+			for i := 0; i < tc.sharers; i++ {
+				insertDecision(t, db, "b"+itoa(i), "decision",
+					"About the boundary "+itoa(i), "body "+itoa(i), `["docs/edge.md"]`, "")
+			}
+			res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertScorable(t, res)
+			c := mustCheck(t, res, "L6")
+			if len(c.Hubs) != tc.wantHubs || len(c.Candidates) != tc.wantCandPrs {
+				t.Fatalf("%d sharers => %d hubs / %d candidates, want %d / %d",
+					tc.sharers, len(c.Hubs), len(c.Candidates), tc.wantHubs, tc.wantCandPrs)
+			}
+			for _, cat := range res.Score.Categories {
+				if cat.Key == "contradictions" && cat.Deduction != 0 {
+					t.Errorf("shared scope deducted %.4f on either side of the boundary", cat.Deduction)
+				}
+			}
+		})
+	}
+}
+
+// F53: deleting the candidate/hub rendering left the suite green, so the
+// disclosure was untested on the surfaces a user actually reads. §D5 inherits
+// ADR-0004 §D6.2 — anything rendered traces to rows, and anything listed must
+// be visibly unscored rather than silently absent.
+func TestL6_CandidatesAreVisibleAndLabelledUnscoredOnEverySurface(t *testing.T) {
+	db := amendment2Store(t)
+	for i := 0; i < 3; i++ {
+		insertDecision(t, db, "v"+itoa(i), "decision",
+			"View case "+itoa(i), "body "+itoa(i), `["docs/view.md"]`, "")
+	}
+	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := &Report{Repo: "fixture", GeneratedAt: time.Now().UTC(), Lint: res,
+		Backlog: &ProposedBacklog{}}
+	for name, out := range map[string]string{"text": rep.Text(), "markdown": rep.Markdown()} {
+		if !strings.Contains(out, "v0") {
+			t.Errorf("%s output does not name a candidate row: %s", name, out)
+		}
+		if !strings.Contains(strings.ToLower(out), "not scored") &&
+			!strings.Contains(strings.ToLower(out), "unscored") {
+			t.Errorf("%s output lists candidates without saying they are unscored: %s", name, out)
+		}
+	}
+	// The markdown "no findings" branch must not swallow the disclosure (F52).
+	md := rep.Markdown()
+	if strings.Contains(md, "_no findings (") && strings.Contains(md, "L6") {
+		i := strings.Index(md, "## L6")
+		if j := strings.Index(md[i:], "_no findings ("); j >= 0 && j < 200 {
+			t.Errorf("L6's markdown section claims no findings while candidates exist:\n%s", md[i:i+400])
+		}
+	}
+	if !strings.Contains(md, "calibration pending") {
+		t.Error("markdown drops the calibration-pending disclosure that Amendment 2 added")
 	}
 }

@@ -946,17 +946,6 @@ func idsExcept(g []Finding, skip int) []string {
 	return out
 }
 
-func sharedGlob(a, b []string) string {
-	for _, x := range a {
-		for _, y := range b {
-			if x == y {
-				return x
-			}
-		}
-	}
-	return ""
-}
-
 func decodeJSONArray(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "[]" {
