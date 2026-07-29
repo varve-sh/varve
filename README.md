@@ -40,7 +40,7 @@ varve setup          # auto-detects Claude Code, Cursor, Windsurf, VS Code, Open
 # 3. Start a new session — memory is live
 ```
 
-Your agent now has seven tools: `memory_save`, `memory_recall`, `memory_get`, `memory_forget`, `memory_update`, `memory_context`, and `memory_prompt`.
+Your agent now has eight tools: `memory_pack`, `memory_recall`, `memory_context`, `memory_save`, `memory_get`, `memory_update`, `memory_forget`, and `memory_prompt`.
 
 ---
 
@@ -76,12 +76,13 @@ All data lives in `.varve/varve.db` — SQLite, local only, no account required.
 
 | Tool | What it does |
 |------|-------------|
-| `memory_save` | Save a decision, convention or note |
-| `memory_recall` | Search memories by natural language query |
+| `memory_pack` | **Session bootstrap.** Everything binding on the files you're about to touch, packed into a token budget, in rank order. Proposals are counted in the footer, never included as content |
+| `memory_recall` | Search memories by natural language query. Mid-task exploration, where `memory_pack` is the once-per-session bootstrap. Proposals come back marked `PROPOSED` |
+| `memory_context` | Everything binding on a given set of files. Proposals are reported as a trailing count with their ids, not as content |
+| `memory_save` | Save a decision, convention or note. A decision or convention is recorded **proposed** and does not bind until a human accepts it |
 | `memory_get` | Fetch the full content of a memory by ID |
-| `memory_forget` | Delete a memory by ID or query |
-| `memory_update` | Edit an existing memory by ID |
-| `memory_context` | Get all memories relevant to a set of files |
+| `memory_update` | Edit an existing memory by ID. Cannot move a note into the governed class — `varve decision promote <id>` does that, and it's a human action |
+| `memory_forget` | Delete a **note** outright. A decision or convention is *not* deleted, rejected or reverted: the call records a disposal request and returns it as pending human confirmation |
 | `memory_prompt` | Capture the user's original request at session start |
 
 → [Full MCP tools reference](docs/mcp-tools.md)

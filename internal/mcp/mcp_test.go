@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1222,5 +1224,69 @@ func TestMemoryContext_DoesNotEmitRecallEvents(t *testing.T) {
 	recalls, _ = k.Decisions().Events(kernel.EventFilter{Kind: types.EventRecallServed})
 	if len(recalls) != 1 {
 		t.Errorf("recall.served events after an explicit recall = %d, want 1", len(recalls))
+	}
+}
+
+// TestREADME_ListsEveryToolTheServerRegisters pins the public tool list against
+// the server.
+//
+// The README's tool table has now been wrong twice: it claimed seven tools after
+// memory_pack shipped, and it described memory_forget as deleting a memory long
+// after Amendment 3 made an agent's forget of a governed memory a disposal
+// request that deletes nothing. Both survived because nothing compared the
+// document to the code. The A2.4 truth pass fixed the same class of drift in
+// CLAUDE.md and the setup templates three times; the README was never in its
+// scope, and it is the page a stranger reads first.
+func TestREADME_ListsEveryToolTheServerRegisters(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatalf("reading README: %v", err)
+	}
+	text := string(readme)
+
+	// Source of truth: the names the server actually registers.
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("reading server.go: %v", err)
+	}
+	names := regexp.MustCompile(`mcp\.NewTool\("([a-z_]+)"`).FindAllStringSubmatch(string(src), -1)
+	if len(names) == 0 {
+		t.Fatal("found no registered tools in server.go — the extraction pattern is stale")
+	}
+
+	seen := map[string]bool{}
+	for _, m := range names {
+		tool := m[1]
+		if seen[tool] {
+			continue
+		}
+		seen[tool] = true
+		if !strings.Contains(text, "`"+tool+"`") {
+			t.Errorf("the server registers %s and the README never mentions it", tool)
+		}
+	}
+	// The count in prose has to move with the list.
+	want := len(seen)
+	counts := map[int]string{7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+	if word, ok := counts[want]; ok && !strings.Contains(text, word+" tools") {
+		t.Errorf("the server registers %d tools; the README does not say %q", want, word+" tools")
+	}
+}
+
+// The two descriptions that were not merely stale but wrong: an agent reading
+// them would expect a delete that does not happen, and a type change the class
+// boundary forbids.
+func TestREADME_DoesNotPromiseBehaviourTheServerRefuses(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, claim := range []string{
+		"| `memory_forget` | Delete a memory by ID or query |",
+		"| `memory_update` | Edit an existing memory by ID |",
+	} {
+		if strings.Contains(string(readme), claim) {
+			t.Errorf("the README carries a description the server contradicts: %s", claim)
+		}
 	}
 }
