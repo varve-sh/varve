@@ -186,6 +186,59 @@ memtrace rm 01KMDX71NT
 
 Export to and import from JSON or Markdown. → See [Import & Export](import-export.md).
 
+`memtrace import` with no arguments lists the memory sources it can find and
+imports nothing. Each source has its own subcommand:
+
+```
+memtrace import claude-mem [--db <path>]   # claude-mem's store — imports as notes
+memtrace import engram     [--db <path>]   # engram — notes, plus proposed decisions
+                                           #   for rows engram itself typed as such
+memtrace import rules                      # CLAUDE.md, AGENTS.md, .cursorrules,
+                                           #   .cursor/rules/*.mdc
+memtrace import undo [<batch-id>]          # default: the most recent batch
+```
+
+Flags on every source: `--dry-run` (preview, save nothing), `--yes` (skip the
+confirmation), `--as-notes` (demote every decision candidate to a note),
+`--format md|json` (report output).
+
+What import does and does not do:
+
+- Nothing lands active. Decision candidates land **proposed** — review them with
+  `memtrace decision pending` and accept the ones you want.
+- Re-running an import against unchanged sources creates zero rows; already
+  imported entries are counted as skipped, never silently re-added.
+- `memtrace import undo` deletes the notes the batch created and rejects the
+  proposals it created. Rows you have already accepted, edited or rejected are
+  left alone and listed by ID.
+- Foreign stores are opened read-only. If a store's schema is not one this
+  importer was tested against, the import refuses rather than importing part of
+  it, and points at that tool's own export command.
+
+---
+
+## `memtrace lint`
+
+Health-checks the corpus and prints the report — the same report every import
+run ends with.
+
+```
+memtrace lint [--format md|json] [--raw]
+```
+
+The corpus-health score covers properties of your memory: dead references,
+duplicates, contradiction candidates, staleness and scope hygiene. It prints
+`x of n` beside every category, states its method, and is suppressed entirely
+below ten entries — a percentage over four rows is noise. Adoption facts
+(proposals awaiting review, packing history, curated evidence) are listed but
+never scored.
+
+Every finding names the rows behind it: `--format md` is the forwardable
+version, `--raw` prints the rows themselves. The checks are deterministic SQL
+plus local git plumbing — no model runs, and nothing leaves the machine.
+Paraphrase duplicates and semantic contradictions are **not** detected, which
+the report says on its own footer.
+
 ---
 
 ## `memtrace browse`
