@@ -22,7 +22,7 @@ import (
 //     `memories` table) and generates the v1 benchmark *from this file*, so the
 //     two sides cannot drift apart. One command, no hand-copying:
 //
-//         scripts/bench-recall-vs-v1.sh [benchtime] [count]
+//     scripts/bench-recall-vs-v1.sh [benchtime] [count]
 //
 //     Measured 2026-07-28, Apple M4 Pro, 100x x3: v1 72.0/72.3/72.6 ms/op,
 //     this tree 49.7/49.6/50.1 ms/op. No regression on this corpus — v2 is
@@ -31,6 +31,7 @@ import (
 //     (The reviewer checked the obvious confound: removing the DSN's
 //     synchronous(NORMAL), which the v1 tree does not set, moves this side by
 //     <1%. Not an fsync artefact.)
+//
 //   - It is still NOT the falsifier's test, which names "the founder's own DB".
 //     A synthetic corpus cannot stand in for one, so the clause is recorded in
 //     planning/decisions-log.md as unfalsified with a reproducible harness,
