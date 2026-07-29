@@ -1,4 +1,4 @@
-module github.com/memtrace-dev/memtrace
+module github.com/varve-sh/varve
 
 go 1.26.1
 

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/importer"
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/lint"
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/importer"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/lint"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // importFlags are §D2.1's flags, shared by every source.

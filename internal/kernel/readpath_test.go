@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // The §D10 read-path port, asserted end to end through the kernel facade —

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // migration is one forward step, compiled into the binary. There are no down

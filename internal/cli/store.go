@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/memtrace-dev/memtrace/internal/util"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // newStoreCmd owns the one operation the rename created: moving a pre-rename

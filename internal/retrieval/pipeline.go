@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/embedding"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/embedding"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // StoreReader defines the subset of MemoryStore methods needed by the pipeline.

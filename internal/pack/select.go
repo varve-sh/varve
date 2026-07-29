@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/memtrace-dev/memtrace/internal/embedding"
+	"github.com/varve-sh/varve/internal/embedding"
 )
 
 // --- P5: deduplication ---

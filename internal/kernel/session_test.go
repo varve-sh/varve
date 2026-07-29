@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // F17: recall.served was §D7-conformant but carried a NULL session_id on the

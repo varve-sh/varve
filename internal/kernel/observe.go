@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/scope"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/scope"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // ObservedCommit is one commit as the diff observer saw it (ADR-0004 §D1.4).

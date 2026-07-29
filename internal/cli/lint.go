@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/lint"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/lint"
 )
 
 func newLintCmd() *cobra.Command {

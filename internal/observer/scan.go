@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
+	"github.com/varve-sh/varve/internal/kernel"
 )
 
 // consecutiveObservedStop is §D1.2's walk terminator: 20, not 1.

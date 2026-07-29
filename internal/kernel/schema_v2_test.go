@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // insertDecisionRaw writes a decision directly, bypassing the kernel, so the

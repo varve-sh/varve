@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/pack"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/pack"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // BenchmarkRecall measures the recall path ADR-0001 falsifier 3 names: "recall-

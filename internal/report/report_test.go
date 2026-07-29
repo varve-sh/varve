@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // ADR-0004's report, driven through the real kernel and the real event log.

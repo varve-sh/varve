@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/memtrace-dev/memtrace/internal/importer"
+	"github.com/varve-sh/varve/internal/importer"
 )
 
 // Options configures one lint run.

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // The normative serializer (ADR-0002 §P8). UTF-8, LF line endings, no trailing

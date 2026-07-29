@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // setupV1Project builds a project whose database is still v1, with n rows.

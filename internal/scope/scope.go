@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // ValidatePattern reports whether p is a syntactically valid glob. Whether it

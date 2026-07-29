@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // seedLegacyStore writes a pre-rename store: .memtrace/memtrace.db plus the

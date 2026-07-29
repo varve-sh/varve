@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 	_ "modernc.org/sqlite"
 )
 

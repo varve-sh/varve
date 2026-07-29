@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // EventInput is one row for the append-only log (ADR-0001 D7).

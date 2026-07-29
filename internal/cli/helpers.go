@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // openKernel detects the project root from cwd and opens the memory kernel.

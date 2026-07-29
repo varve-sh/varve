@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // idempotencyBudget is ADR-0001 Amendment 6 / ADR-0005 open question 1's

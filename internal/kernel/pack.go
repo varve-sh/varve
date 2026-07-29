@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/pack"
-	"github.com/memtrace-dev/memtrace/internal/retrieval"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/pack"
+	"github.com/varve-sh/varve/internal/retrieval"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // packSource adapts the kernel's stores to ADR-0002's packer.

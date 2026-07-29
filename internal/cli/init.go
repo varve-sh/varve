@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/util"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 func newInitCmd() *cobra.Command {

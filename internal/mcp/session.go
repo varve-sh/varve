@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // sessionTracker records MCP tool activity within a single server lifetime.

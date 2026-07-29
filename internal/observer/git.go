@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
+	"github.com/varve-sh/varve/internal/kernel"
 )
 
 // revertTrailer is §D2's rule, and the whole of revert detection for the 90

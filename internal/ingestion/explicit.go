@@ -1,7 +1,7 @@
 package ingestion
 
 import (
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // Validate checks a MemorySaveInput for correctness before saving.

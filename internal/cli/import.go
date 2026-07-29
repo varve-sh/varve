@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/memtrace-dev/memtrace/internal/ingestion"
-	"github.com/memtrace-dev/memtrace/internal/types"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/ingestion"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // listSources prints the probe results for `import` with no arguments.

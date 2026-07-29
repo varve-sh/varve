@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/embedding"
-	"github.com/memtrace-dev/memtrace/internal/retrieval"
-	"github.com/memtrace-dev/memtrace/internal/scope"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/embedding"
+	"github.com/varve-sh/varve/internal/retrieval"
+	"github.com/varve-sh/varve/internal/scope"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // --- P1: the tool contract ---

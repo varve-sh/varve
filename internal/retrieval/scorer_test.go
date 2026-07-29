@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 func TestScoreCandidates_Empty(t *testing.T) {

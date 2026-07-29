@@ -1,8 +1,8 @@
 package ingestion
 
 import (
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // Pipeline coordinates all ingestion processors.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // importFixture is deliberately not minimal. The interesting states for an

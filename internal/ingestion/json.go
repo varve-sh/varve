@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // ImportJSON reads a JSON source (file path or HTTP/HTTPS URL) containing either

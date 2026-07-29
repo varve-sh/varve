@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // Scoring weights — each set must sum to 1.0.

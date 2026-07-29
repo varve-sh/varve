@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/scope"
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
+	"github.com/varve-sh/varve/internal/scope"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 // DecisionStore owns the governed half of the schema: decisions, evidence and

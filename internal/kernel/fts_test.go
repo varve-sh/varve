@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // The FTS candidate query has a 1000× planning cliff, and it is invisible on a

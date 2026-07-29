@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // Invariant I1 (ADR-0001 §D7, made normative by Amendment 4): every

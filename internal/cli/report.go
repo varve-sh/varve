@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/report"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/report"
 )
 
 // newReportCmd is ADR-0004 §D6's reporting surface.

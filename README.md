@@ -23,7 +23,7 @@ A decision an agent saves arrives **proposed**: it doesn't bind, and it isn't pa
 brew install varve-sh/tap/varve
 ```
 
-Or: `go install github.com/memtrace-dev/memtrace/cmd/varve@latest` · [prebuilt binaries](https://github.com/memtrace-dev/memtrace/releases/latest)
+Or: `go install github.com/varve-sh/varve/cmd/varve@latest` · [prebuilt binaries](https://github.com/varve-sh/varve/releases/latest)
 
 ---
 

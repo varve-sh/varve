@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // ExportMarkdown renders a slice of memories as a human-readable Markdown document

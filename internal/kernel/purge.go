@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // PurgeArm records which of Amendment 4's two behaviours ran. The caller has

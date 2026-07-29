@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/types"
+	"github.com/varve-sh/varve/internal/util"
 )
 
 func newStatusCmd() *cobra.Command {

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // Multiple agents writing to one database file is the product's normal

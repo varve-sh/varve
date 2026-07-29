@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // ADR-0004 §D1.4 and ADR-0001 §D6, asserted without a git repository: the

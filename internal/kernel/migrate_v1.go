@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // The v1→v2 conversion is an export→reimport, not an in-place table rebuild.

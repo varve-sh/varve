@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/memtrace-dev/memtrace/internal/ingestion"
-	"github.com/memtrace-dev/memtrace/internal/types"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/ingestion"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 func newExportCmd() *cobra.Command {

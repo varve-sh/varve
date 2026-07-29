@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // gitProject is setupProject plus a real git repository, because the observer

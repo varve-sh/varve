@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 func newSaveCmd() *cobra.Command {

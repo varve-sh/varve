@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 func TestValidate_Valid(t *testing.T) {

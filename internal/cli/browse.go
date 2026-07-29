@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"github.com/memtrace-dev/memtrace/internal/tui"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/tui"
 )
 
 func newBrowseCmd() *cobra.Command {

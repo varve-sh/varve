@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/memtrace-dev/memtrace/internal/retrieval"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/retrieval"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // A pack that returns zero items is a passing test and a broken product, so

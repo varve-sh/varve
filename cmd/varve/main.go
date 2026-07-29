@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/memtrace-dev/memtrace/internal/cli"
+	"github.com/varve-sh/varve/internal/cli"
 )
 
 // version is set at build time via -ldflags "-X main.version=x.y.z".

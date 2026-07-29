@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	mcpserver "github.com/memtrace-dev/memtrace/internal/mcp"
 	"github.com/spf13/cobra"
+	mcpserver "github.com/varve-sh/varve/internal/mcp"
 )
 
 func newServeCmd() *cobra.Command {

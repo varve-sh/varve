@@ -3,11 +3,11 @@ package kernel
 import (
 	"errors"
 
-	"github.com/memtrace-dev/memtrace/internal/pack"
+	"github.com/varve-sh/varve/internal/pack"
 	"strings"
 	"testing"
 
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // ADR-0001 Amendment 4. Purge is the only destructive verb in the product, so

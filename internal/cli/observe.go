@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/memtrace-dev/memtrace/internal/observer"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/observer"
 )
 
 // newObserveCmd is ADR-0004 §D1's hook path: observe one commit.

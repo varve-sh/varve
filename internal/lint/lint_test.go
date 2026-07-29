@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/kernel"
+	"github.com/varve-sh/varve/internal/kernel"
 )
 
 const project = "p"

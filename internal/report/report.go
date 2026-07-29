@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/observer"
+	"github.com/varve-sh/varve/internal/observer"
 )
 
 // Report is one rendering-ready attribution report (§D6).

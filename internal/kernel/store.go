@@ -9,9 +9,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/memtrace-dev/memtrace/internal/retrieval"
-	"github.com/memtrace-dev/memtrace/internal/scope"
-	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/varve-sh/varve/internal/retrieval"
+	"github.com/varve-sh/varve/internal/scope"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // MemoryStore is the v1-shaped read/write facade over the v2 tables

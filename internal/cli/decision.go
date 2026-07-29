@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/memtrace-dev/memtrace/internal/kernel"
-	"github.com/memtrace-dev/memtrace/internal/types"
 	"github.com/spf13/cobra"
+	"github.com/varve-sh/varve/internal/kernel"
+	"github.com/varve-sh/varve/internal/types"
 )
 
 // newDecisionCmd is the human-confirmation surface for the decision lifecycle
