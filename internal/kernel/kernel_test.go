@@ -230,10 +230,10 @@ func TestKernel_Recall_UpdatesAccessCount(t *testing.T) {
 func TestKernel_HasEmbedder_False(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("MEMTRACE_EMBED_KEY", "")
+	t.Setenv("VARVE_EMBED_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("MEMTRACE_EMBED_URL", "")
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_URL", "")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := setupTestKernel(t)
 	if k.HasEmbedder() {
 		t.Error("expected HasEmbedder=false when provider is disabled")
@@ -241,8 +241,8 @@ func TestKernel_HasEmbedder_False(t *testing.T) {
 }
 
 func TestKernel_HasEmbedder_True(t *testing.T) {
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "")
-	t.Setenv("MEMTRACE_EMBED_KEY", "test-key")
+	t.Setenv("VARVE_EMBED_PROVIDER", "")
+	t.Setenv("VARVE_EMBED_KEY", "test-key")
 	k := setupTestKernel(t)
 	if !k.HasEmbedder() {
 		t.Error("expected HasEmbedder=true when key is set")
@@ -263,10 +263,10 @@ func TestKernel_HasEmbedder_LocalURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MEMTRACE_EMBED_KEY", "")
+	t.Setenv("VARVE_EMBED_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("MEMTRACE_EMBED_URL", srv.URL)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "")
+	t.Setenv("VARVE_EMBED_URL", srv.URL)
+	t.Setenv("VARVE_EMBED_PROVIDER", "")
 	k := setupTestKernel(t)
 	if !k.HasEmbedder() {
 		t.Error("expected HasEmbedder=true when local URL is set without key")
@@ -280,10 +280,10 @@ func TestKernel_HasEmbedder_LocalURL(t *testing.T) {
 func TestKernel_Reindex_NoEmbedder(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("MEMTRACE_EMBED_KEY", "")
+	t.Setenv("VARVE_EMBED_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("MEMTRACE_EMBED_URL", "")
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_URL", "")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := setupTestKernel(t)
 	k.Save(types.MemorySaveInput{Content: "no embedder memory"})
 
@@ -316,9 +316,9 @@ func fakeEmbedServer(t *testing.T) *httptest.Server {
 
 func TestKernel_Reindex_WithEmbedder(t *testing.T) {
 	srv := fakeEmbedServer(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "")
-	t.Setenv("MEMTRACE_EMBED_KEY", "test-key")
-	t.Setenv("MEMTRACE_EMBED_URL", srv.URL)
+	t.Setenv("VARVE_EMBED_PROVIDER", "")
+	t.Setenv("VARVE_EMBED_KEY", "test-key")
+	t.Setenv("VARVE_EMBED_URL", srv.URL)
 
 	k := setupTestKernel(t)
 
@@ -346,9 +346,9 @@ func TestKernel_Reindex_WithEmbedder(t *testing.T) {
 
 func TestKernel_Reindex_SkipsAlreadyEmbedded(t *testing.T) {
 	srv := fakeEmbedServer(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "")
-	t.Setenv("MEMTRACE_EMBED_KEY", "test-key")
-	t.Setenv("MEMTRACE_EMBED_URL", srv.URL)
+	t.Setenv("VARVE_EMBED_PROVIDER", "")
+	t.Setenv("VARVE_EMBED_KEY", "test-key")
+	t.Setenv("VARVE_EMBED_URL", srv.URL)
 
 	k := setupTestKernel(t)
 	m := makeMemory("01RESKIP01", "test-project", types.MemoryTypeFact)

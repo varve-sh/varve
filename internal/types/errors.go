@@ -3,7 +3,7 @@ package types
 import "errors"
 
 var (
-	ErrNotInitialized = errors.New("memtrace is not initialized in this directory — run 'memtrace init' first")
+	ErrNotInitialized = errors.New("varve is not initialized in this directory — run 'varve init' first")
 	ErrMemoryNotFound = errors.New("memory not found")
 	ErrValidation     = errors.New("validation error")
 
@@ -19,7 +19,7 @@ var (
 	ErrDecisionImmutable = errors.New("accepted decisions are immutable; supersede instead")
 	// ErrLegacyDatabase is returned by Open() on a v1 database. v1 databases are
 	// never auto-migrated (ADR-0001 D9).
-	ErrLegacyDatabase = errors.New("this is a v1 database — run 'memtrace migrate --from-v1' to convert it")
+	ErrLegacyDatabase = errors.New("this is a v1 database — run 'varve migrate --from-v1' to convert it")
 	// ErrUnknownEventKind rejects an event kind outside the ADR-0001 §D7 catalogue.
 	ErrUnknownEventKind = errors.New("unknown event kind")
 	// ErrMigrationNotReady blocks the v1→v2 conversion while the v2 read paths

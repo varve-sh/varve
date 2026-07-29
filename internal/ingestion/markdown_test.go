@@ -25,7 +25,7 @@ func makeMemory(content string, memType types.MemoryType, tags []string, files [
 
 func TestExportMarkdown_Empty(t *testing.T) {
 	out := ExportMarkdown(nil)
-	if !strings.HasPrefix(out, "# Memtrace Export") {
+	if !strings.HasPrefix(out, "# Varve Export") {
 		t.Errorf("missing header, got: %s", out)
 	}
 	if strings.Contains(out, "## [") {
@@ -191,7 +191,7 @@ func TestImportMarkdown_FileNotFound(t *testing.T) {
 }
 
 func TestImportMarkdown_HandwrittenFormat(t *testing.T) {
-	doc := `# Memtrace Export
+	doc := `# Varve Export
 
 Exported: 2026-03-24T00:00:00Z | 1 memory
 
@@ -229,7 +229,7 @@ We chose SQLite because it requires no separate server process and supports FTS5
 }
 
 func TestParseMarkdown_SkipsEmptyContent(t *testing.T) {
-	doc := `# Memtrace Export
+	doc := `# Varve Export
 
 Exported: 2026-03-24T00:00:00Z | 0 memories
 
@@ -261,7 +261,7 @@ has content
 }
 
 func TestParseMarkdown_UnknownTypeDefaultsToFact(t *testing.T) {
-	doc := `# Memtrace Export
+	doc := `# Varve Export
 
 ---
 

@@ -30,8 +30,8 @@ func listSources(cmd *cobra.Command) error {
 		}
 		fmt.Fprintf(out, "  %-16s %s (%s)\n", p.Source, p.Detail, p.Path)
 	}
-	fmt.Fprintln(out, "\nImport one with: memtrace import claude-mem | engram | rules")
-	fmt.Fprintln(out, "Everything imports as proposed or notes; undo with: memtrace import undo")
+	fmt.Fprintln(out, "\nImport one with: varve import claude-mem | engram | rules")
+	fmt.Fprintln(out, "Everything imports as proposed or notes; undo with: varve import undo")
 	return nil
 }
 
@@ -46,8 +46,8 @@ func newImportCmd() *cobra.Command {
 		Long: `Import memories from a file or HTTP/HTTPS URL.
 
 Supported formats:
-  JSON     — memtrace export format (array or single memory object)
-  Markdown — memtrace export format (.md files are auto-detected)
+  JSON     — varve export format (array or single memory object)
+  Markdown — varve export format (.md files are auto-detected)
 
 Use --dry-run to preview what would be imported without saving.`,
 		Args: cobra.MaximumNArgs(1),

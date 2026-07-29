@@ -77,7 +77,7 @@ func (r *repo) commit(msg string, date string, files map[string]string) string {
 
 func testKernel(t *testing.T, root string) *kernel.MemoryKernel {
 	t.Helper()
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := kernel.New(filepath.Join(t.TempDir(), "obs.db"), "proj-obs")
 	if err := k.Open(); err != nil {
 		t.Fatal(err)

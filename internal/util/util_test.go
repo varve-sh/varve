@@ -12,7 +12,7 @@ import (
 
 func TestFindProjectRoot_WithMemtraceDir(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".memtrace"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".varve"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -51,19 +51,19 @@ func TestFindProjectRoot_WithGitDir(t *testing.T) {
 }
 
 func TestFindProjectRoot_MemtracePreferredOverGit(t *testing.T) {
-	// .git at root, .memtrace in subdir — should return the subdir level
+	// .git at root, .varve in subdir — should return the subdir level
 	outer := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(outer, ".git"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	inner := filepath.Join(outer, "inner")
-	if err := os.MkdirAll(filepath.Join(inner, ".memtrace"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(inner, ".varve"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
 	got := FindProjectRoot(inner)
 	if got != inner {
-		t.Errorf("want %s (memtrace wins), got %s", inner, got)
+		t.Errorf("want %s (varve wins), got %s", inner, got)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestFindProjectRoot_NotFound(t *testing.T) {
 
 func TestGetProjectDbPath(t *testing.T) {
 	root := "/some/project"
-	want := "/some/project/.memtrace/memtrace.db"
+	want := "/some/project/.varve/varve.db"
 	got := GetProjectDbPath(root)
 	if got != want {
 		t.Errorf("want %s, got %s", want, got)
@@ -94,12 +94,12 @@ func TestGetConfigDir_ReturnsMemtraceSubdir(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "") // prevent interference on Linux
 
 	got := GetConfigDir()
-	// Platform-agnostic: path must be absolute and end in "memtrace".
+	// Platform-agnostic: path must be absolute and end in "varve".
 	if !filepath.IsAbs(got) {
 		t.Errorf("expected absolute path, got: %s", got)
 	}
-	if !strings.HasSuffix(got, "memtrace") {
-		t.Errorf("expected path ending in 'memtrace', got: %s", got)
+	if !strings.HasSuffix(got, "varve") {
+		t.Errorf("expected path ending in 'varve', got: %s", got)
 	}
 }
 

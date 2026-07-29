@@ -29,7 +29,7 @@ changes touched its scope, and whether those changes conformed to it or
 violated it (ADR-0004).
 
 Every figure is computed from the append-only event log and drills down to the
-raw rows: memtrace report --decision <id> --raw.`,
+raw rows: varve report --decision <id> --raw.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			k, projectRoot, err := openKernel()
 			if err != nil {

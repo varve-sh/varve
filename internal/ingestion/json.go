@@ -13,7 +13,7 @@ import (
 )
 
 // ImportJSON reads a JSON source (file path or HTTP/HTTPS URL) containing either
-// a JSON array of Memory objects (memtrace export format) or a single Memory object,
+// a JSON array of Memory objects (varve export format) or a single Memory object,
 // and returns them as MemorySaveInput slice ready for ingestion.
 func ImportJSON(source string) ([]types.MemorySaveInput, error) {
 	data, err := readSource(source)

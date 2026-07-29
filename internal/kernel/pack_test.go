@@ -20,7 +20,7 @@ import (
 
 func packKernel(t *testing.T) *MemoryKernel {
 	t.Helper()
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := New(filepath.Join(t.TempDir(), "pack.db"), testProject)
 	if err := k.Open(); err != nil {
 		t.Fatalf("open: %v", err)

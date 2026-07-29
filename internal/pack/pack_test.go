@@ -679,10 +679,15 @@ func TestBuild_GoldenPack(t *testing.T) {
 		Task:      "add refresh-token rotation",
 	})
 
+	// The golden's `used` moved 351 → 350 with the rename, and only that line
+	// moved: the manifest header lost 3 bytes ("MEMTRACE" → "VARVE"), and the
+	// estimator is ceil(utf8_bytes/3), so exactly one token. Recorded because a
+	// golden file whose number changes without an explanation is indistinguishable
+	// from one that was edited until it passed.
 	const golden = `VARVE PACK v1
 files: internal/auth/middleware.go, internal/auth/session.go
 task: add refresh-token rotation
-budget: 2000 est-tokens (bytes/3 v1) · used: 351 · items: 4 (3 decisions, 1 note) · omitted: 0
+budget: 2000 est-tokens (bytes/3 v1) · used: 350 · items: 4 (3 decisions, 1 note) · omitted: 0
 
 [1] DECISION 01J8QBBBBBBBBBBBBBBBBBBBBB · VIOLATED (2 unresolved) · conf 0.88 · scope: internal/auth/session.go
 Sessions are stored server-side only.
@@ -701,7 +706,7 @@ Never logged at the call site.
 Session table was denormalized in March.
 (full text: memory_get 01J6TDDDDDDDDDDDDDDDDDDDDD)
 
--- proposed decisions touching these files: 1 (01J2HEEEEEEEEEEEEEEEEEEEEE) — not binding until accepted; review with ` + "`memtrace decision accept <id>`" + `
+-- proposed decisions touching these files: 1 (01J2HEEEEEEEEEEEEEEEEEEEEE) — not binding until accepted; review with ` + "`varve decision accept <id>`" + `
 `
 	if res.Text != golden {
 		t.Errorf("pack is not byte-identical to the golden file.\n--- got ---\n%s\n--- want ---\n%s",

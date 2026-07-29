@@ -108,7 +108,7 @@ func TestNewClient_CustomValues(t *testing.T) {
 // --- NewClientFromEnv ---
 
 func TestNewClientFromEnv_NoKey(t *testing.T) {
-	t.Setenv("MEMTRACE_EMBED_KEY", "")
+	t.Setenv("VARVE_EMBED_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 
 	c := NewClientFromEnv()
@@ -118,7 +118,7 @@ func TestNewClientFromEnv_NoKey(t *testing.T) {
 }
 
 func TestNewClientFromEnv_WithKey(t *testing.T) {
-	t.Setenv("MEMTRACE_EMBED_KEY", "test-key")
+	t.Setenv("VARVE_EMBED_KEY", "test-key")
 
 	c := NewClientFromEnv()
 	if c == nil {
@@ -130,9 +130,9 @@ func TestNewClientFromEnv_WithKey(t *testing.T) {
 }
 
 func TestNewClientFromEnv_Defaults(t *testing.T) {
-	t.Setenv("MEMTRACE_EMBED_KEY", "k")
-	t.Setenv("MEMTRACE_EMBED_URL", "")
-	t.Setenv("MEMTRACE_EMBED_MODEL", "")
+	t.Setenv("VARVE_EMBED_KEY", "k")
+	t.Setenv("VARVE_EMBED_URL", "")
+	t.Setenv("VARVE_EMBED_MODEL", "")
 
 	c := NewClientFromEnv()
 	if c.baseURL != "https://api.openai.com/v1" {
@@ -144,9 +144,9 @@ func TestNewClientFromEnv_Defaults(t *testing.T) {
 }
 
 func TestNewClientFromEnv_CustomValues(t *testing.T) {
-	t.Setenv("MEMTRACE_EMBED_KEY", "k")
-	t.Setenv("MEMTRACE_EMBED_URL", "http://localhost:11434/v1")
-	t.Setenv("MEMTRACE_EMBED_MODEL", "nomic-embed-text")
+	t.Setenv("VARVE_EMBED_KEY", "k")
+	t.Setenv("VARVE_EMBED_URL", "http://localhost:11434/v1")
+	t.Setenv("VARVE_EMBED_MODEL", "nomic-embed-text")
 
 	c := NewClientFromEnv()
 	if c.baseURL != "http://localhost:11434/v1" {

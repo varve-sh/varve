@@ -12,7 +12,7 @@ import (
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Read and write global memtrace settings",
+		Short: "Read and write global varve settings",
 	}
 	cmd.AddCommand(newConfigSetCmd(), newConfigGetCmd(), newConfigUnsetCmd())
 	return cmd
@@ -20,9 +20,9 @@ func newConfigCmd() *cobra.Command {
 
 // Supported keys and where they map in EmbedConfig.
 var configKeys = map[string]string{
-	"embed.key":      "Embedding API key (MEMTRACE_EMBED_KEY / OPENAI_API_KEY)",
-	"embed.url":      "Embedding API base URL (MEMTRACE_EMBED_URL)",
-	"embed.model":    "Embedding model name (MEMTRACE_EMBED_MODEL)",
+	"embed.key":      "Embedding API key (VARVE_EMBED_KEY / OPENAI_API_KEY)",
+	"embed.url":      "Embedding API base URL (VARVE_EMBED_URL)",
+	"embed.model":    "Embedding model name (VARVE_EMBED_MODEL)",
 	"embed.provider": `Embedding provider override: "auto" (default) or "disabled"`,
 }
 

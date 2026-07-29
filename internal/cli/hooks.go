@@ -23,13 +23,13 @@ import (
 // will delete angrily.
 //
 // The output redirection is not belt-and-braces: found by running this against
-// a machine with an *older* memtrace on PATH, which does not know the
+// a machine with an *older* varve on PATH, which does not know the
 // `observe` subcommand and printed a cobra usage error into the middle of a
 // commit. `--quiet` can only silence a binary that understands it, so §D7's
 // "never prints" has to be structural.
-const hookLine = `command -v memtrace >/dev/null 2>&1 && memtrace observe --commit HEAD --quiet >/dev/null 2>&1 &`
+const hookLine = `command -v varve >/dev/null 2>&1 && varve observe --commit HEAD --quiet >/dev/null 2>&1 &`
 
-const hookHeader = "# installed by memtrace — safe to delete; `memtrace scan` recovers missed commits"
+const hookHeader = "# installed by varve — safe to delete; `varve scan` recovers missed commits"
 
 func newHooksCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -59,7 +59,7 @@ func newHooksInstallCmd() *cobra.Command {
 			if custom := gitConfig(projectRoot, "core.hooksPath"); custom != "" {
 				fmt.Printf("This repository sets core.hooksPath = %s, so .git/hooks is not used.\n", custom)
 				fmt.Printf("Add this line to %s/post-commit yourself:\n\n  %s\n\n", custom, hookLine)
-				fmt.Println("Until then, `memtrace scan` still observes every commit — one session later.")
+				fmt.Println("Until then, `varve scan` still observes every commit — one session later.")
 				return nil
 			}
 
@@ -77,12 +77,12 @@ func newHooksInstallCmd() *cobra.Command {
 					return fmt.Errorf("writing hook: %w", err)
 				}
 				fmt.Printf("Installed %s\n", hookPath)
-			case strings.Contains(string(existing), "memtrace observe"):
+			case strings.Contains(string(existing), "varve observe"):
 				// Idempotent: chaining is normal, double-appending is not.
-				fmt.Printf("%s already runs memtrace — nothing to do\n", hookPath)
+				fmt.Printf("%s already runs varve — nothing to do\n", hookPath)
 			case !looksLikeShellScript(string(existing)):
 				color.New(color.FgYellow).Printf(
-					"%s exists and is not a shell script memtrace can safely append to.\n", hookPath)
+					"%s exists and is not a shell script varve can safely append to.\n", hookPath)
 				fmt.Printf("Add this line to it yourself:\n\n  %s\n", hookLine)
 				return nil
 			default:
@@ -90,12 +90,12 @@ func newHooksInstallCmd() *cobra.Command {
 				if err := os.WriteFile(hookPath, []byte(appended), 0o755); err != nil {
 					return fmt.Errorf("appending to hook: %w", err)
 				}
-				fmt.Printf("Appended memtrace to the existing %s\n", hookPath)
+				fmt.Printf("Appended varve to the existing %s\n", hookPath)
 			}
 
 			color.New(color.Faint).Println(
 				"The hook never blocks, never prints, and cannot fail a commit. " +
-					"`memtrace scan` recovers anything it misses.")
+					"`varve scan` recovers anything it misses.")
 			return nil
 		},
 	}
@@ -139,7 +139,7 @@ func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
 // installPostCommitHook is `init`'s best-effort hook installation (§D1.1).
 // It is silent about failure: a repository that cannot take the hook still
-// gets complete observation from `memtrace scan`, one session later.
+// gets complete observation from `varve scan`, one session later.
 func installPostCommitHook(projectRoot string) {
 	if gitConfig(projectRoot, "core.hooksPath") != "" {
 		return
@@ -151,12 +151,12 @@ func installPostCommitHook(projectRoot string) {
 	path := filepath.Join(dir, "post-commit")
 	existing, readErr := os.ReadFile(path)
 	if readErr == nil {
-		if strings.Contains(string(existing), "memtrace observe") || !looksLikeShellScript(string(existing)) {
+		if strings.Contains(string(existing), "varve observe") || !looksLikeShellScript(string(existing)) {
 			return
 		}
 		body := strings.TrimRight(string(existing), "\n") + "\n\n" + hookHeader + "\n" + hookLine + "\n"
 		if os.WriteFile(path, []byte(body), 0o755) == nil {
-			fmt.Println("Added memtrace to the existing post-commit hook (it cannot fail or slow a commit).")
+			fmt.Println("Added varve to the existing post-commit hook (it cannot fail or slow a commit).")
 		}
 		return
 	}

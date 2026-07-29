@@ -9,9 +9,9 @@ func NewRootCmd(version ...string) *cobra.Command {
 		v = version[0]
 	}
 	root := &cobra.Command{
-		Use:     "memtrace",
+		Use:     "varve",
 		Short:   "Local-first memory engine for AI coding agents",
-		Long:    "Memtrace gives AI coding tools persistent, structured memory across sessions.\nWebsite: https://memtrace.sh",
+		Long:    "Varve gives AI coding tools persistent, structured memory across sessions.\nWebsite: https://varve.sh",
 		Version: v,
 	}
 
@@ -30,6 +30,7 @@ func NewRootCmd(version ...string) *cobra.Command {
 		newServeCmd(),
 		newBrowseCmd(),
 		newStatusCmd(),
+		newStoreCmd(),
 		newReindexCmd(),
 		newScanCmd(),
 		newObserveCmd(),

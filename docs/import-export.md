@@ -1,6 +1,6 @@
 # Import & Export
 
-`memtrace export` dumps memories to a file. `memtrace import` loads them back. Both support JSON and Markdown.
+`varve export` dumps memories to a file. `varve import` loads them back. Both support JSON and Markdown.
 
 ---
 
@@ -8,14 +8,14 @@
 
 ```bash
 # JSON (default)
-memtrace export --output memories.json
+varve export --output memories.json
 
 # Markdown — human-readable, editable by hand
-memtrace export --format markdown --output memories.md
+varve export --format markdown --output memories.md
 
 # Filtered export
-memtrace export --type decision --output decisions.json
-memtrace export --status stale --output stale.json
+varve export --type decision --output decisions.json
+varve export --status stale --output stale.json
 ```
 
 ---
@@ -24,17 +24,17 @@ memtrace export --status stale --output stale.json
 
 ```bash
 # Auto-detected by file extension
-memtrace import memories.md
-memtrace import memories.json
+varve import memories.md
+varve import memories.json
 
 # Preview without saving
-memtrace import memories.md --dry-run
+varve import memories.md --dry-run
 
 # Import only decisions
-memtrace import memories.json --type decision
+varve import memories.json --type decision
 
 # Force format
-memtrace import backup.txt --format json
+varve import backup.txt --format json
 ```
 
 ---
@@ -73,7 +73,7 @@ with errors.Is / errors.As at the call site.
 Both commands accept an HTTP/HTTPS URL in place of a file path:
 
 ```bash
-memtrace import https://example.com/memories.json
+varve import https://example.com/memories.json
 ```
 
 ---
@@ -83,10 +83,10 @@ memtrace import https://example.com/memories.json
 ```bash
 # Export from project A
 cd project-a
-memtrace export --format markdown --output ../shared-conventions.md
+varve export --format markdown --output ../shared-conventions.md
 
 # Import into project B
 cd ../project-b
-memtrace import ../shared-conventions.md --dry-run   # preview first
-memtrace import ../shared-conventions.md
+varve import ../shared-conventions.md --dry-run   # preview first
+varve import ../shared-conventions.md
 ```

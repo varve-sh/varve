@@ -19,30 +19,30 @@ func newInitCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize memtrace for the current project",
+		Short: "Initialize varve for the current project",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
 
-			// Find project root (prefer .git/ if no .memtrace/ yet)
+			// Find project root (prefer .git/ if no .varve/ yet)
 			projectRoot := util.FindProjectRoot(cwd)
 			if projectRoot == "" {
 				projectRoot = cwd
 			}
 
-			memtraceDir := filepath.Join(projectRoot, ".memtrace")
+			memtraceDir := filepath.Join(projectRoot, ".varve")
 
 			// Check if already initialized
 			if info, err := os.Stat(memtraceDir); err == nil && info.IsDir() {
-				fmt.Printf("memtrace is already initialized in %s\n", projectRoot)
+				fmt.Printf("varve is already initialized in %s\n", projectRoot)
 				return nil
 			}
 
-			// Create .memtrace directory
+			// Create .varve directory
 			if err := os.MkdirAll(memtraceDir, 0755); err != nil {
-				return fmt.Errorf("creating .memtrace directory: %w", err)
+				return fmt.Errorf("creating .varve directory: %w", err)
 			}
 
 			// Determine project name
@@ -80,13 +80,13 @@ func newInitCmd() *cobra.Command {
 				return fmt.Errorf("recording the observation epoch: %w", err)
 			}
 
-			// Add .memtrace/ to .gitignore
+			// Add .varve/ to .gitignore
 			addToGitignore(projectRoot)
 
-			// Add memtrace instructions to CLAUDE.md (Claude Code only)
+			// Add varve instructions to CLAUDE.md (Claude Code only)
 			addToClaudeMd(projectRoot)
 
-			fmt.Printf("Initialized memtrace in %s\n", projectRoot)
+			fmt.Printf("Initialized varve in %s\n", projectRoot)
 
 			// ADR-0005 §D2.6: init *offers* an import instead of running one.
 			// It replaces IngestOnInit's silent bulk save — no dedup key, no
@@ -103,19 +103,19 @@ func newInitCmd() *cobra.Command {
 						}
 						fmt.Printf("  %-16s %s\n", p.Source, p.Detail)
 					}
-					fmt.Println("\nImport it with: memtrace import claude-mem | engram | rules")
-					fmt.Println("Everything lands as proposed or notes, and `memtrace import undo` reverses it.")
+					fmt.Println("\nImport it with: varve import claude-mem | engram | rules")
+					fmt.Println("Everything lands as proposed or notes, and `varve import undo` reverses it.")
 				}
 			}
 
 			// §D1.1: offer the hook (default yes, declinable). It never blocks,
-			// never prints and cannot fail a commit; `memtrace scan` recovers
+			// never prints and cannot fail a commit; `varve scan` recovers
 			// whatever it misses.
 			if !noHooks {
 				installPostCommitHook(projectRoot)
 			}
 
-			fmt.Println("\nNext: run 'memtrace setup' to wire the MCP server into your agent.")
+			fmt.Println("\nNext: run 'varve setup' to wire the MCP server into your agent.")
 			return nil
 		},
 	}
@@ -127,7 +127,7 @@ func newInitCmd() *cobra.Command {
 	return cmd
 }
 
-// addToGitignore appends .memtrace/ to .gitignore if the file exists and doesn't already contain it.
+// addToGitignore appends .varve/ to .gitignore if the file exists and doesn't already contain it.
 func addToGitignore(projectRoot string) {
 	gitignorePath := filepath.Join(projectRoot, ".gitignore")
 	data, err := os.ReadFile(gitignorePath)
@@ -138,11 +138,11 @@ func addToGitignore(projectRoot string) {
 		// overwritten" on a file the user never edited. Found by running the
 		// observer end to end in a fresh repository.
 		if os.IsNotExist(err) {
-			_ = os.WriteFile(gitignorePath, []byte(".memtrace/\n"), 0o644)
+			_ = os.WriteFile(gitignorePath, []byte(".varve/\n"), 0o644)
 		}
 		return
 	}
-	if strings.Contains(string(data), ".memtrace") {
+	if strings.Contains(string(data), ".varve") {
 		return // already present
 	}
 	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0644)
@@ -155,5 +155,5 @@ func addToGitignore(projectRoot string) {
 	if strings.HasSuffix(content, "\n") {
 		prefix = ""
 	}
-	fmt.Fprintf(f, "%s.memtrace/\n", prefix)
+	fmt.Fprintf(f, "%s.varve/\n", prefix)
 }

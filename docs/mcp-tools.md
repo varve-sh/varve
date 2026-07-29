@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Memtrace exposes eight MCP tools. Your agent calls them directly — no configuration needed beyond `memtrace setup`.
+Varve exposes eight MCP tools. Your agent calls them directly — no configuration needed beyond `varve setup`.
 
 ---
 
@@ -48,7 +48,7 @@ Errors are wrapped with %w and never logged at the call site.
 [body elided — 640 est. tokens; memory_get 01J7X…]
 
 -- omitted (over budget): 2 — DECISION 01J5R… (rank 5, 812 est. tokens), NOTE 01J4M… (rank 6, 96 est. tokens)
--- proposed decisions touching these files: 2 (01J2H…, 01J1G…) — not binding until accepted; review with `memtrace decision accept <id>`
+-- proposed decisions touching these files: 2 (01J2H…, 01J1G…) — not binding until accepted; review with `varve decision accept <id>`
 -- raise budget_tokens or memory_get an ID above for anything elided
 ```
 
@@ -87,7 +87,7 @@ memory_save(
 
 **Decisions and conventions are governed.** One saved over MCP lands
 `proposed`: it is captured, but it does not bind until a human accepts it
-(`memtrace decision accept <id>`), and it is never volunteered as context.
+(`varve decision accept <id>`), and it is never volunteered as context.
 
 Which tool you call decides how you see it:
 

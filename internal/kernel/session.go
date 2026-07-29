@@ -21,7 +21,7 @@ import (
 //   - A CLI invocation gets a synthetic per-invocation session carrying
 //     `agent = 'cli'`, which every coverage denominator excludes (§D3
 //     amendment 3). It is registered lazily — the events are written the first
-//     time the invocation emits something session-scoped — so `memtrace list`
+//     time the invocation emits something session-scoped — so `varve list`
 //     does not write two rows to say nothing happened.
 //
 // Without these rows ADR-0002 §P11's window join has nothing to join to: the

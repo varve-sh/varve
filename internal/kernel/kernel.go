@@ -109,11 +109,11 @@ func (k *MemoryKernel) Open() error {
 	// Wire up optional embedder.
 	// Priority: env vars > config file > Ollama auto-detect.
 	cfg := util.GetProjectConfig()
-	providerOverride := firstNonEmpty(os.Getenv("MEMTRACE_EMBED_PROVIDER"), cfg.Embed.Provider)
+	providerOverride := firstNonEmpty(os.Getenv("VARVE_EMBED_PROVIDER"), cfg.Embed.Provider)
 	if providerOverride != "disabled" {
-		key := firstNonEmpty(os.Getenv("MEMTRACE_EMBED_KEY"), os.Getenv("OPENAI_API_KEY"), cfg.Embed.Key)
-		url := firstNonEmpty(os.Getenv("MEMTRACE_EMBED_URL"), cfg.Embed.URL)
-		model := firstNonEmpty(os.Getenv("MEMTRACE_EMBED_MODEL"), cfg.Embed.Model)
+		key := firstNonEmpty(os.Getenv("VARVE_EMBED_KEY"), os.Getenv("OPENAI_API_KEY"), cfg.Embed.Key)
+		url := firstNonEmpty(os.Getenv("VARVE_EMBED_URL"), cfg.Embed.URL)
+		model := firstNonEmpty(os.Getenv("VARVE_EMBED_MODEL"), cfg.Embed.Model)
 
 		// Use *Client as intermediate to avoid the interface-wrapping-nil-pointer bug.
 		var ec *embedding.Client

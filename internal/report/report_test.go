@@ -38,7 +38,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := kernel.New(filepath.Join(t.TempDir(), "report.db"), project)
 	if err := k.Open(); err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestCoverage_TheKillCriterionQuery(t *testing.T) {
 		[]string{"internal/auth/y.go"}, "")
 
 	// A CLI session, which §D3 excludes from the denominator: a hundred
-	// one-second `memtrace list` invocations must not sandbag coverage.
+	// one-second `varve list` invocations must not sandbag coverage.
 	f.session("cli", f.base.Add(3*time.Hour), d.ID)
 
 	cov, err := QueryCoverage(f.db, Options{From: f.base.Add(-time.Hour), To: f.base.Add(24 * time.Hour)})

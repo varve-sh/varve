@@ -33,7 +33,7 @@ const mcpAgentName = "mcp"
 // then auto-saves a session summary if any memories were saved.
 func Serve(k *kernel.MemoryKernel) error {
 	s := server.NewMCPServer(
-		"memtrace",
+		"varve",
 		"0.1.0",
 		server.WithToolCapabilities(true),
 	)
@@ -51,7 +51,7 @@ func Serve(k *kernel.MemoryKernel) error {
 	// from a teammate, made before install, or lost to a busy database.
 	//
 	// Errors are swallowed by design (§D7): the observer's own failures belong
-	// in .memtrace/observer.log and in `memtrace report`'s completeness line,
+	// in .varve/observer.log and in `varve report`'s completeness line,
 	// never in an agent's tool output.
 	go func() {
 		if root := util.FindProjectRoot(workingDir()); root != "" {
@@ -87,7 +87,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 	// Tool 1: memory_save
 	s.AddTool(
 		mcp.NewTool("memory_save",
-			mcp.WithDescription("Save a memory (decision, convention or note) to the local memory store. Decisions and conventions are governed: one you save is recorded as proposed and does not bind until a human accepts it with `memtrace decision accept`; it is never served as binding context, and when it comes back from memory_recall or memory_context it is marked PROPOSED — treat anything so marked as a pending proposal rather than as law, and tell the user it is waiting rather than assuming it took effect. `fact` and `event` are synonyms for `note`: retrievable, ungoverned. Use this when you learn something important about the project that should persist across sessions. topic_key behaviour differs by type: for a note, re-saving with the same key updates it in place; for a decision or convention, it creates a *new* proposed decision that supersedes the current holder once accepted, and returns a new id."),
+			mcp.WithDescription("Save a memory (decision, convention or note) to the local memory store. Decisions and conventions are governed: one you save is recorded as proposed and does not bind until a human accepts it with `varve decision accept`; it is never served as binding context, and when it comes back from memory_recall or memory_context it is marked PROPOSED — treat anything so marked as a pending proposal rather than as law, and tell the user it is waiting rather than assuming it took effect. `fact` and `event` are synonyms for `note`: retrievable, ungoverned. Use this when you learn something important about the project that should persist across sessions. topic_key behaviour differs by type: for a note, re-saving with the same key updates it in place; for a decision or convention, it creates a *new* proposed decision that supersedes the current holder once accepted, and returns a new id."),
 			mcp.WithString("content",
 				mcp.Required(),
 				mcp.Description("The memory content to save. Be specific and self-contained. Wrap sensitive details in <private>...</private> to prevent them from being stored."),
@@ -271,7 +271,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 	// Tool 3: memory_forget
 	s.AddTool(
 		mcp.NewTool("memory_forget",
-			mcp.WithDescription("Forget a memory: delete a note by ID, or act on the top memory matching a query. Notes are deleted outright. A decision or convention is NOT deleted, rejected or reverted by this call — disposal of a governed memory is a human action, so the call records a disposal request and returns it as pending; tell the user it awaits their confirmation with `memtrace decision reject <id>` or `memtrace decision revert <id>`."),
+			mcp.WithDescription("Forget a memory: delete a note by ID, or act on the top memory matching a query. Notes are deleted outright. A decision or convention is NOT deleted, rejected or reverted by this call — disposal of a governed memory is a human action, so the call records a disposal request and returns it as pending; tell the user it awaits their confirmation with `varve decision reject <id>` or `varve decision revert <id>`."),
 			mcp.WithString("id",
 				mcp.Description("Specific memory ID to delete"),
 			),
@@ -582,8 +582,8 @@ func forgetResult(outcome kernel.DisposalOutcome, id, preview string) string {
 		return fmt.Sprintf(
 			"Disposal request recorded for decision %s%s. Nothing was deleted, rejected or "+
 				"reverted: disposing of a governed memory is a human action. Tell the user the "+
-				"request is pending their confirmation — `memtrace decision reject %s` while it "+
-				"is proposed, or `memtrace decision revert %s` once it is binding.",
+				"request is pending their confirmation — `varve decision reject %s` while it "+
+				"is proposed, or `varve decision revert %s` once it is binding.",
 			id, suffix, id, id)
 	default:
 		return fmt.Sprintf("Memory %s not found, or already disposed of", id)

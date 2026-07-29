@@ -15,8 +15,8 @@ func newSetupCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "setup [agent]",
-		Short: "Wire memtrace into your AI coding agent's MCP config",
-		Long: `Adds memtrace to your agent's MCP configuration so it is available in every session.
+		Short: "Wire varve into your AI coding agent's MCP config",
+		Long: `Adds varve to your agent's MCP configuration so it is available in every session.
 
 Supported agents:
   claude-code   Writes to .claude/mcp.json (or ~/.claude/mcp.json with --global)
@@ -26,7 +26,7 @@ Supported agents:
   windsurf      Writes to ~/.codeium/windsurf/mcp_config.json
   gemini        Writes to .gemini/settings.json
 
-If no agent is specified, memtrace auto-detects which agents are configured in the
+If no agent is specified, varve auto-detects which agents are configured in the
 current directory and sets up all detected ones. Falls back to claude-code if none
 are detected.
 
@@ -63,12 +63,12 @@ The command is idempotent — running it again is safe.`,
 
 			if !any {
 				fmt.Println("No agents set up. Specify an agent:")
-				fmt.Println("  memtrace setup claude-code")
-				fmt.Println("  memtrace setup cursor")
-				fmt.Println("  memtrace setup vscode")
-				fmt.Println("  memtrace setup opencode")
-				fmt.Println("  memtrace setup windsurf")
-				fmt.Println("  memtrace setup gemini")
+				fmt.Println("  varve setup claude-code")
+				fmt.Println("  varve setup cursor")
+				fmt.Println("  varve setup vscode")
+				fmt.Println("  varve setup opencode")
+				fmt.Println("  varve setup windsurf")
+				fmt.Println("  varve setup gemini")
 			}
 			return nil
 		},
@@ -120,7 +120,7 @@ func detectAgents(projectRoot string) []string {
 	return found
 }
 
-// setupAgent writes the memtrace MCP entry into the agent's config file.
+// setupAgent writes the varve MCP entry into the agent's config file.
 // Returns (true, nil) if the entry was written, (false, nil) if it was already present.
 func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 	switch agent {
@@ -136,7 +136,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 			configPath = filepath.Join(projectRoot, ".claude", "mcp.json")
 		}
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "memtrace",
+			"command": "varve",
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -150,7 +150,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 	case "cursor":
 		configPath := filepath.Join(projectRoot, ".cursor", "mcp.json")
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "memtrace",
+			"command": "varve",
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -163,7 +163,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 		configPath := filepath.Join(projectRoot, ".vscode", "mcp.json")
 		written, err := writeMCPEntry(configPath, "servers", map[string]interface{}{
 			"type":    "stdio",
-			"command": "memtrace",
+			"command": "varve",
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -176,7 +176,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 		configPath := filepath.Join(projectRoot, "opencode.json")
 		return writeMCPEntry(configPath, "mcp", map[string]interface{}{
 			"type":    "local",
-			"command": []string{"memtrace", "serve"},
+			"command": []string{"varve", "serve"},
 		})
 
 	case "windsurf":
@@ -186,7 +186,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 		}
 		configPath := filepath.Join(home, ".codeium", "windsurf", "mcp_config.json")
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "memtrace",
+			"command": "varve",
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -198,7 +198,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 	case "gemini":
 		configPath := filepath.Join(projectRoot, ".gemini", "settings.json")
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "memtrace",
+			"command": "varve",
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -214,7 +214,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 
 // memtraceInstructionsCore is the shared instructions text injected into every
 // agent's rules/instructions file. All agent-specific snippets derive from this.
-const memtraceInstructionsCore = `This project has the memtrace MCP server connected. Use its tools for all memory operations — never use built-in memory tools.
+const memtraceInstructionsCore = `This project has the varve MCP server connected. Use its tools for all memory operations — never use built-in memory tools.
 
 Memory tools: memory_pack, memory_recall, memory_save, memory_get, memory_update, memory_forget, memory_context, memory_prompt
 
@@ -230,17 +230,17 @@ What actually happens when you call these tools:
 
 - memory_save with type=decision or convention creates a row with status
   "proposed". It does not bind, and memory_context will not return it as
-  context. A human runs "memtrace decision accept <id>" to make it binding.
+  context. A human runs "varve decision accept <id>" to make it binding.
   Say that the proposal is waiting; do not report it as adopted.
 - memory_save with type=fact or event creates a note. fact and event are
   synonyms for note: retrievable, ungoverned, no lifecycle. memory_update
-  cannot turn a note into a decision — "memtrace decision promote <id>" does
+  cannot turn a note into a decision — "varve decision promote <id>" does
   that, and it is a human action.
 - memory_forget on a note deletes it. memory_forget on a decision or
   convention deletes nothing and changes no status: it records a
   disposal request and returns it as pending. A human confirms with
-  "memtrace decision reject <id>" while the decision is proposed, or
-  "memtrace decision revert <id>" once it is binding. Tell the user the
+  "varve decision reject <id>" while the decision is proposed, or
+  "varve decision revert <id>" once it is binding. Tell the user the
   request is waiting for them.
 - memory_recall and memory_get return proposals, marked PROPOSED. Treat
   anything so marked as a pending proposal, not as law.
@@ -254,40 +254,40 @@ What actually happens when you call these tools:
   budget_tokens. Proposals are never in the body, only in the footer count.`
 
 // claudeMdSnippet wraps the core in a CLAUDE.md section.
-const claudeMdSnippet = "\n## memtrace (memory)\n\n" + memtraceInstructionsCore + "\n"
+const claudeMdSnippet = "\n## varve (memory)\n\n" + memtraceInstructionsCore + "\n"
 
 // cursorRulesSnippet wraps the core in Cursor's MDC format.
-const cursorRulesSnippet = "---\ndescription: memtrace memory instructions\nalwaysApply: true\n---\n\n" + memtraceInstructionsCore + "\n"
+const cursorRulesSnippet = "---\ndescription: varve memory instructions\nalwaysApply: true\n---\n\n" + memtraceInstructionsCore + "\n"
 
 // copilotInstructionsSnippet wraps the core for .github/copilot-instructions.md.
-const copilotInstructionsSnippet = "\n## memtrace\n\n" + memtraceInstructionsCore + "\n"
+const copilotInstructionsSnippet = "\n## varve\n\n" + memtraceInstructionsCore + "\n"
 
 // windsurfRulesSnippet wraps the core for .windsurfrules.
-const windsurfRulesSnippet = "\n# memtrace\n\n" + memtraceInstructionsCore + "\n"
+const windsurfRulesSnippet = "\n# varve\n\n" + memtraceInstructionsCore + "\n"
 
 // geminiMdSnippet wraps the core for GEMINI.md.
-const geminiMdSnippet = "\n## memtrace\n\n" + memtraceInstructionsCore + "\n"
+const geminiMdSnippet = "\n## varve\n\n" + memtraceInstructionsCore + "\n"
 
-// addToClaudeMd appends memtrace instructions to CLAUDE.md if not already present.
+// addToClaudeMd appends varve instructions to CLAUDE.md if not already present.
 func addToClaudeMd(projectRoot string) {
 	appendInstructions(filepath.Join(projectRoot, "CLAUDE.md"), claudeMdSnippet)
 }
 
-// addToCursorRules writes a memtrace rule file to .cursor/rules/memtrace.mdc.
+// addToCursorRules writes a varve rule file to .cursor/rules/varve.mdc.
 // It is idempotent — if the file already exists it is left unchanged.
 func addToCursorRules(projectRoot string) {
 	rulesDir := filepath.Join(projectRoot, ".cursor", "rules")
 	if err := os.MkdirAll(rulesDir, 0755); err != nil {
 		return
 	}
-	rulePath := filepath.Join(rulesDir, "memtrace.mdc")
+	rulePath := filepath.Join(rulesDir, "varve.mdc")
 	if _, err := os.Stat(rulePath); err == nil {
 		return // already exists
 	}
 	_ = os.WriteFile(rulePath, []byte(cursorRulesSnippet), 0644)
 }
 
-// addToCopilotInstructions appends memtrace instructions to .github/copilot-instructions.md.
+// addToCopilotInstructions appends varve instructions to .github/copilot-instructions.md.
 func addToCopilotInstructions(projectRoot string) {
 	dir := filepath.Join(projectRoot, ".github")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -296,20 +296,20 @@ func addToCopilotInstructions(projectRoot string) {
 	appendInstructions(filepath.Join(dir, "copilot-instructions.md"), copilotInstructionsSnippet)
 }
 
-// addToWindsurfRules appends memtrace instructions to .windsurfrules.
+// addToWindsurfRules appends varve instructions to .windsurfrules.
 func addToWindsurfRules(projectRoot string) {
 	appendInstructions(filepath.Join(projectRoot, ".windsurfrules"), windsurfRulesSnippet)
 }
 
-// addToGeminiMd appends memtrace instructions to GEMINI.md.
+// addToGeminiMd appends varve instructions to GEMINI.md.
 func addToGeminiMd(projectRoot string) {
 	appendInstructions(filepath.Join(projectRoot, "GEMINI.md"), geminiMdSnippet)
 }
 
-// appendInstructions appends snippet to path if "memtrace" is not already present.
+// appendInstructions appends snippet to path if "varve" is not already present.
 func appendInstructions(path, snippet string) {
 	data, _ := os.ReadFile(path)
-	if strings.Contains(string(data), "memtrace") {
+	if strings.Contains(string(data), "varve") {
 		return
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -320,7 +320,7 @@ func appendInstructions(path, snippet string) {
 	f.WriteString(snippet)
 }
 
-// writeMCPEntry reads (or creates) the JSON config at path, merges the memtrace
+// writeMCPEntry reads (or creates) the JSON config at path, merges the varve
 // entry under the given key, and writes it back. Returns false if already present.
 func writeMCPEntry(path, serversKey string, entry map[string]interface{}) (bool, error) {
 	// Ensure parent directory exists
@@ -346,11 +346,11 @@ func writeMCPEntry(path, serversKey string, entry map[string]interface{}) (bool,
 	}
 
 	// Already present — nothing to do
-	if _, exists := servers["memtrace"]; exists {
+	if _, exists := servers["varve"]; exists {
 		return false, nil
 	}
 
-	servers["memtrace"] = entry
+	servers["varve"] = entry
 	cfg[serversKey] = servers
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

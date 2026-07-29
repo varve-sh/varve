@@ -20,8 +20,8 @@ import (
 
 func setupServer(t *testing.T) (*server.MCPServer, *kernel.MemoryKernel) {
 	t.Helper()
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
-	t.Setenv("MEMTRACE_EMBED_URL", "")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_URL", "")
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	k := kernel.New(dbPath, "test-project")
 	if err := k.Open(); err != nil {
@@ -29,7 +29,7 @@ func setupServer(t *testing.T) (*server.MCPServer, *kernel.MemoryKernel) {
 	}
 	t.Cleanup(func() { k.Close() })
 
-	s := server.NewMCPServer("memtrace", "0.0.0", server.WithToolCapabilities(true))
+	s := server.NewMCPServer("varve", "0.0.0", server.WithToolCapabilities(true))
 	// Mirror Serve: one connection is one session, announced when it opens
 	// (ADR-0004 §D3), and the tracker takes the kernel's id.
 	registerTools(s, k, newSessionTracker(k.BeginSession(mcpAgentName, "")))
@@ -572,7 +572,7 @@ func TestSessionTracker_SaveTool_RecordsInTracker(t *testing.T) {
 	}
 	defer k.Close()
 
-	s := server.NewMCPServer("memtrace", "0.0.0", server.WithToolCapabilities(true))
+	s := server.NewMCPServer("varve", "0.0.0", server.WithToolCapabilities(true))
 	tr := newSessionTracker(util.GenerateID())
 	registerTools(s, k, tr)
 
@@ -734,7 +734,7 @@ func TestSessionTracker_RecallTool_RecordsInTracker(t *testing.T) {
 	}
 	defer k.Close()
 
-	s := server.NewMCPServer("memtrace", "0.0.0", server.WithToolCapabilities(true))
+	s := server.NewMCPServer("varve", "0.0.0", server.WithToolCapabilities(true))
 	tr := newSessionTracker(util.GenerateID())
 	registerTools(s, k, tr)
 

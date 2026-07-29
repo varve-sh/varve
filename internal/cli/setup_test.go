@@ -80,7 +80,7 @@ func TestWriteMCPEntry_CreatesFile(t *testing.T) {
 	path := filepath.Join(dir, "mcp.json")
 
 	wrote, err := writeMCPEntry(path, "mcpServers", map[string]interface{}{
-		"command": "memtrace",
+		"command": "varve",
 		"args":    []string{"serve"},
 	})
 	if err != nil {
@@ -96,8 +96,8 @@ func TestWriteMCPEntry_CreatesFile(t *testing.T) {
 		t.Fatalf("invalid JSON written: %v", err)
 	}
 	servers := cfg["mcpServers"].(map[string]interface{})
-	entry := servers["memtrace"].(map[string]interface{})
-	if entry["command"] != "memtrace" {
+	entry := servers["varve"].(map[string]interface{})
+	if entry["command"] != "varve" {
 		t.Errorf("unexpected command: %v", entry["command"])
 	}
 }
@@ -117,7 +117,7 @@ func TestWriteMCPEntry_MergesExistingConfig(t *testing.T) {
 	os.WriteFile(path, []byte(existing), 0644)
 
 	wrote, err := writeMCPEntry(path, "mcpServers", map[string]interface{}{
-		"command": "memtrace",
+		"command": "varve",
 		"args":    []string{"serve"},
 	})
 	if err != nil {
@@ -135,8 +135,8 @@ func TestWriteMCPEntry_MergesExistingConfig(t *testing.T) {
 	if _, ok := servers["other-tool"]; !ok {
 		t.Error("existing entry should be preserved")
 	}
-	if _, ok := servers["memtrace"]; !ok {
-		t.Error("memtrace entry should be added")
+	if _, ok := servers["varve"]; !ok {
+		t.Error("varve entry should be added")
 	}
 }
 
@@ -144,7 +144,7 @@ func TestWriteMCPEntry_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
 
-	entry := map[string]interface{}{"command": "memtrace", "args": []string{"serve"}}
+	entry := map[string]interface{}{"command": "varve", "args": []string{"serve"}}
 
 	wrote, err := writeMCPEntry(path, "mcpServers", entry)
 	if err != nil || !wrote {
@@ -165,7 +165,7 @@ func TestWriteMCPEntry_CreatesParentDir(t *testing.T) {
 	path := filepath.Join(dir, ".claude", "mcp.json") // .claude/ does not exist yet
 
 	wrote, err := writeMCPEntry(path, "mcpServers", map[string]interface{}{
-		"command": "memtrace",
+		"command": "varve",
 		"args":    []string{"serve"},
 	})
 	if err != nil {
@@ -185,7 +185,7 @@ func TestWriteMCPEntry_VSCodeFormat(t *testing.T) {
 
 	_, err := writeMCPEntry(path, "servers", map[string]interface{}{
 		"type":    "stdio",
-		"command": "memtrace",
+		"command": "varve",
 		"args":    []string{"serve"},
 	})
 	if err != nil {
@@ -218,7 +218,7 @@ func TestSetupAgent_Opencode(t *testing.T) {
 	var cfg map[string]interface{}
 	json.Unmarshal(data, &cfg)
 	mcp := cfg["mcp"].(map[string]interface{})
-	entry := mcp["memtrace"].(map[string]interface{})
+	entry := mcp["varve"].(map[string]interface{})
 	if entry["type"] != "local" {
 		t.Errorf("expected type=local, got %v", entry["type"])
 	}
@@ -238,8 +238,8 @@ func TestSetupAgent_Gemini(t *testing.T) {
 	var cfg map[string]interface{}
 	json.Unmarshal(data, &cfg)
 	servers := cfg["mcpServers"].(map[string]interface{})
-	if _, ok := servers["memtrace"]; !ok {
-		t.Error("memtrace entry not found in .gemini/settings.json")
+	if _, ok := servers["varve"]; !ok {
+		t.Error("varve entry not found in .gemini/settings.json")
 	}
 }
 
@@ -270,7 +270,7 @@ func TestInstructionTemplates_DescribeObservableBehaviour(t *testing.T) {
 		for _, want := range []struct{ claim, text string }{
 			// (1) an agent-saved decision lands proposed and does not bind
 			{"the status a governed save lands in", `"proposed"`},
-			{"how a human makes it binding", "memtrace decision accept"},
+			{"how a human makes it binding", "varve decision accept"},
 			// (2) fact/event are note synonyms
 			{"fact/event are notes", "synonyms for note"},
 			// (3) an agent's forget records a request — it does not dispose
@@ -279,8 +279,8 @@ func TestInstructionTemplates_DescribeObservableBehaviour(t *testing.T) {
 			{"pack is the first call", "memory_pack"},
 			{"recall is for exploration", "memory_recall"},
 			{"forget changes nothing", "changes no status"},
-			{"who confirms a disposal, while proposed", "memtrace decision reject"},
-			{"who confirms a disposal, once binding", "memtrace decision revert"},
+			{"who confirms a disposal, while proposed", "varve decision reject"},
+			{"who confirms a disposal, once binding", "varve decision revert"},
 		} {
 			if !strings.Contains(snippet.text, want.text) {
 				t.Errorf("%s template does not state %s (missing %q)",
@@ -323,12 +323,12 @@ func TestRepoClaudeMD_StatesTheSameNormativeContent(t *testing.T) {
 
 	for _, want := range []struct{ claim, text string }{
 		{"a governed save lands proposed", "proposed"},
-		{"how a human makes it binding", "memtrace decision accept"},
+		{"how a human makes it binding", "varve decision accept"},
 		{"fact/event are notes", "synonyms for note"},
 		{"forget records a request", "disposal request"},
 		{"forget changes nothing", "changes no status"},
-		{"who confirms while proposed", "memtrace decision reject"},
-		{"who confirms once binding", "memtrace decision revert"},
+		{"who confirms while proposed", "varve decision reject"},
+		{"who confirms once binding", "varve decision revert"},
 		{"pack is the first call", "memory_pack"},
 	} {
 		if !strings.Contains(plain, want.text) {

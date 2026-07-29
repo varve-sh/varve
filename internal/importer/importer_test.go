@@ -244,8 +244,8 @@ func TestProbeRules_CountsWithoutImporting(t *testing.T) {
 func TestImportRulesFile_SkipsToolInstructionBlock(t *testing.T) {
 	root := t.TempDir()
 	body := "# Style\n\nUse tabs.\n\n" +
-		"## memtrace (memory)\n\nUse memory_recall before every task. memory_save persists decisions.\n\n" +
-		"## memtrace\n\nOur own note about how we use memtrace on this team.\n"
+		"## varve (memory)\n\nUse memory_recall before every task. memory_save persists decisions.\n\n" +
+		"## varve\n\nOur own note about how we use varve on this team.\n"
 	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -263,8 +263,8 @@ func TestImportRulesFile_SkipsToolInstructionBlock(t *testing.T) {
 	}
 	// A user's genuine block that merely mentions the tool is still imported —
 	// the skip matches what this tool writes, not what mentions it.
-	if !strings.Contains(got[1].Content, "how we use memtrace on this team") {
-		t.Fatalf("a user block titled memtrace was dropped: %+v", got[1])
+	if !strings.Contains(got[1].Content, "how we use varve on this team") {
+		t.Fatalf("a user block titled varve was dropped: %+v", got[1])
 	}
 }
 

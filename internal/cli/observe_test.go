@@ -72,11 +72,11 @@ func TestHooksInstall_WritesAHookThatCannotFailACommit(t *testing.T) {
 
 	// §D1.1 and §D7: every clause of the hook line is load-bearing.
 	for _, want := range []struct{ claim, text string }{
-		{"no-op without the binary on PATH", "command -v memtrace"},
+		{"no-op without the binary on PATH", "command -v varve"},
 		{"runs in the background so a commit never waits", "&"},
 		{"prints nothing and exits 0", "--quiet"},
 		{"silences even a binary too old to know --quiet", ">/dev/null 2>&1 &"},
-		{"says how to recover if it is deleted", "memtrace scan"},
+		{"says how to recover if it is deleted", "varve scan"},
 	} {
 		if !strings.Contains(hook, want.text) {
 			t.Errorf("the hook does not %s (missing %q):\n%s", want.claim, want.text, hook)
@@ -92,7 +92,7 @@ func TestHooksInstall_WritesAHookThatCannotFailACommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ = os.ReadFile(filepath.Join(root, ".git", "hooks", "post-commit"))
-	if strings.Count(string(body), "memtrace observe") != 1 {
+	if strings.Count(string(body), "varve observe") != 1 {
 		t.Errorf("installing twice duplicated the hook line:\n%s", body)
 	}
 }
@@ -117,8 +117,8 @@ func TestHooksInstall_AppendsToAnExistingHook(t *testing.T) {
 	if !strings.Contains(string(body), "my own hook") {
 		t.Errorf("the existing hook was overwritten:\n%s", body)
 	}
-	if !strings.Contains(string(body), "memtrace observe") {
-		t.Errorf("memtrace was not appended:\n%s", body)
+	if !strings.Contains(string(body), "varve observe") {
+		t.Errorf("varve was not appended:\n%s", body)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestHooksInstall_RefusesToAppendToABinaryHook(t *testing.T) {
 		t.Errorf("the refusal must tell the user what to do:\n%s", out)
 	}
 	body, _ := os.ReadFile(hookPath)
-	if strings.Contains(string(body), "memtrace") {
+	if strings.Contains(string(body), "varve") {
 		t.Errorf("a hook that could not be parsed was modified anyway:\n%q", body)
 	}
 }
@@ -182,7 +182,7 @@ func TestObserveCmd_QuietExitsZeroWhenTheDatabaseIsBusy(t *testing.T) {
 	sha := commitFile(t, root, "internal/auth/session.go", "package auth", "add session")
 
 	// Hold the writer, as a live MCP session would.
-	blocker, err := kernel.OpenDB(filepath.Join(root, ".memtrace", "memtrace.db"))
+	blocker, err := kernel.OpenDB(filepath.Join(root, ".varve", "varve.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestObserveCmd_QuietExitsZeroWhenTheDatabaseIsBusy(t *testing.T) {
 	}
 
 	// The failure is recorded where §D7 says it goes, and nowhere else.
-	logPath := filepath.Join(root, ".memtrace", "observer.log")
+	logPath := filepath.Join(root, ".varve", "observer.log")
 	if body, readErr := os.ReadFile(logPath); readErr == nil && len(body) > 0 {
 		if !strings.Contains(string(body), "busy") && !strings.Contains(string(body), "locked") {
 			t.Logf("observer.log recorded: %s", body)
@@ -334,7 +334,7 @@ func TestInitCmd_RecordsTheObservationEpoch(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -367,7 +367,7 @@ func TestInitCmd_CreatesAGitignoreWhenThereIsNone(t *testing.T) {
 		t.Skip("git not available")
 	}
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +385,7 @@ func TestInitCmd_CreatesAGitignoreWhenThereIsNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no .gitignore created: %v", err)
 	}
-	if !strings.Contains(string(body), ".memtrace") {
+	if !strings.Contains(string(body), ".varve") {
 		t.Errorf(".gitignore does not exclude the store:\n%s", body)
 	}
 }

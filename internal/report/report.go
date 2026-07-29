@@ -241,7 +241,7 @@ func (r *Report) Text() string {
 				"default-branch commits observed"))
 		if r.Completeness.EpochBounded {
 			fmt.Fprintf(&b, "              since install (%s); %d earlier commits are outside\n"+
-				"              the observer's remit — `memtrace scan --backfill` covers them\n",
+				"              the observer's remit — `varve scan --backfill` covers them\n",
 				r.Completeness.Since.Format("2006-01-02"), r.Completeness.PreEpoch)
 		}
 	} else {
@@ -259,7 +259,7 @@ func (r *Report) Text() string {
 		}
 	}
 
-	b.WriteString("\nevery number drills to raw events: memtrace report --decision <id> --raw\n")
+	b.WriteString("\nevery number drills to raw events: varve report --decision <id> --raw\n")
 	b.WriteString(limitationsFooter)
 	b.WriteString("\n")
 	return b.String()
@@ -403,7 +403,7 @@ func SortDecisions(rows []DecisionRow) {
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].DecisionID < rows[j].DecisionID })
 }
 
-// CoverageText renders §D5.1 for `memtrace report coverage`.
+// CoverageText renders §D5.1 for `varve report coverage`.
 //
 // Day one's answer is 0 of 0, and it is displayed as "no agent sessions yet",
 // never as a percentage: 0% would read as a failing product when it means an

@@ -58,7 +58,7 @@ func TestDisposalPrompt_SaysWhatWillActuallyHappen(t *testing.T) {
 // the list and reappeared on the next reload. The prompt is a pure function
 // and was tested; the key path was not.
 func TestConfirmDelete_ReportsNothingWhenNothingHappened(t *testing.T) {
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := kernel.New(filepath.Join(t.TempDir(), "tui.db"), "proj-tui")
 	if err := k.Open(); err != nil {
 		t.Fatal(err)

@@ -1,15 +1,15 @@
 version: 2
 
-project_name: memtrace
+project_name: varve
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: memtrace
-    main: ./cmd/memtrace
-    binary: memtrace
+  - id: varve
+    main: ./cmd/varve
+    binary: varve
     env:
       - CGO_ENABLED=0
     ldflags:
@@ -26,7 +26,7 @@ builds:
         goarch: arm64
 
 archives:
-  - id: memtrace
+  - id: varve
     formats:
       - tar.gz
     format_overrides:
@@ -65,23 +65,23 @@ changelog:
 
 release:
   github:
-    owner: memtrace-dev
-    name: memtrace
+    owner: varve-sh
+    name: varve
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
 
 brews:
-  - name: memtrace
+  - name: varve
     repository:
-      owner: memtrace-dev
+      owner: varve-sh
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    homepage: https://memtrace.sh
+    homepage: https://varve.sh
     description: "Local-first memory engine for AI coding agents"
     license: MIT
     test: |
-      system "#{bin}/memtrace", "--version"
+      system "#{bin}/varve", "--version"
     install: |
-      bin.install "memtrace"
+      bin.install "varve"

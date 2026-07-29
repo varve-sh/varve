@@ -16,13 +16,13 @@ import (
 func setupV1Project(t *testing.T) (root string, ids []string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, ".memtrace"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".varve"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cfg := util.GetProjectConfig()
@@ -122,8 +122,8 @@ func TestMigrateCmd_GateStillRefusesWhenClosed(t *testing.T) {
 	if !strings.Contains(err.Error(), "invisible") {
 		t.Errorf("the refusal must say why, got: %v", err)
 	}
-	for _, name := range []string{"memtrace.v1.bak.db", "migration-v1-export.json"} {
-		if _, statErr := os.Stat(filepath.Join(root, ".memtrace", name)); statErr == nil {
+	for _, name := range []string{"varve.v1.bak.db", "migration-v1-export.json"} {
+		if _, statErr := os.Stat(filepath.Join(root, ".varve", name)); statErr == nil {
 			t.Errorf("a refused conversion must not create %s", name)
 		}
 	}
@@ -143,11 +143,11 @@ func TestMigrateCmd_FromV1(t *testing.T) {
 	}
 
 	// The v1 backup and the export are both kept.
-	backup := filepath.Join(root, ".memtrace", "memtrace.v1.bak.db")
+	backup := filepath.Join(root, ".varve", "varve.v1.bak.db")
 	if _, err := os.Stat(backup); err != nil {
 		t.Errorf("v1 backup missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".memtrace", "migration-v1-export.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, ".varve", "migration-v1-export.json")); err != nil {
 		t.Errorf("export missing: %v", err)
 	}
 

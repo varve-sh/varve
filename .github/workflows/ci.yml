@@ -24,7 +24,7 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -timeout 120s
         env:
-          MEMTRACE_EMBED_PROVIDER: disabled
+          VARVE_EMBED_PROVIDER: disabled
 
   build:
     name: Build (cross-platform)
@@ -52,7 +52,7 @@ jobs:
           cache: true
 
       - name: Build
-        run: go build -ldflags "-s -w -X main.version=dev" -o /dev/null ./cmd/memtrace
+        run: go build -ldflags "-s -w -X main.version=dev" -o /dev/null ./cmd/varve
         env:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}

@@ -70,7 +70,7 @@ func newStatusCmd() *cobra.Command {
 
 			bold.Printf("Project:   %s\n", entry.Name)
 			dim.Printf("Root:      %s\n", projectRoot)
-			dim.Printf("Database:  %s (%s)\n", filepath.Join(".memtrace", "memtrace.db"), dbSize)
+			dim.Printf("Database:  %s (%s)\n", filepath.Join(".varve", "varve.db"), dbSize)
 			fmt.Println()
 			bold.Printf("Memories:  %d total\n", total)
 			// The same three classes the counts were collected for. Iterating the
@@ -101,10 +101,10 @@ func newStatusCmd() *cobra.Command {
 			if statusCounts["stale"] > 0 || statusCounts["proposed"] > 0 {
 				color.New(color.FgYellow).Printf("%s", line)
 				if statusCounts["stale"] > 0 {
-					dim.Printf("           run 'memtrace list --status stale' to review\n")
+					dim.Printf("           run 'varve list --status stale' to review\n")
 				}
 				if statusCounts["proposed"] > 0 {
-					dim.Printf("           run 'memtrace decision pending' to confirm or decline proposals\n")
+					dim.Printf("           run 'varve decision pending' to confirm or decline proposals\n")
 				}
 			} else {
 				fmt.Printf("%s", line)

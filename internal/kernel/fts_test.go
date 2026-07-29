@@ -67,7 +67,7 @@ func TestSearchFTS_StaysFastWhenEverythingMatches(t *testing.T) {
 	if testing.Short() {
 		t.Skip("populates 2,000 decisions")
 	}
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := New(filepath.Join(t.TempDir(), "fts.db"), testProject)
 	if err := k.Open(); err != nil {
 		t.Fatal(err)

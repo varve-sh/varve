@@ -13,7 +13,7 @@ import (
 // that can be round-tripped through ImportMarkdown.
 func ExportMarkdown(memories []types.Memory) string {
 	var b strings.Builder
-	b.WriteString("# Memtrace Export\n\n")
+	b.WriteString("# Varve Export\n\n")
 	b.WriteString(fmt.Sprintf("Exported: %s | %d %s\n",
 		time.Now().UTC().Format(time.RFC3339),
 		len(memories),

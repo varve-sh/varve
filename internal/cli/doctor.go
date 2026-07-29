@@ -15,12 +15,12 @@ import (
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
-		Short: "Check the health of your memtrace setup",
-		Long:  "Runs a series of checks and reports any issues with your memtrace configuration.",
+		Short: "Check the health of your varve setup",
+		Long:  "Runs a series of checks and reports any issues with your varve configuration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			k, projectRoot, err := openKernel()
 			if err != nil {
-				printCheck(checkFail, "Database", "not initialized — run 'memtrace init'")
+				printCheck(checkFail, "Database", "not initialized — run 'varve init'")
 				fmt.Println()
 				fmt.Println("1 issue found.")
 				return nil
@@ -51,13 +51,13 @@ func newDoctorCmd() *cobra.Command {
 			staleCount, _ := k.Count("", types.MemoryStatusStale)
 			archived, _ := k.Count("", types.MemoryStatusArchived)
 			totalAll := live + staleCount + archived
-			ok("Database", fmt.Sprintf("%s (%s, %d memories)", filepath.Join(".memtrace", "memtrace.db"), size, totalAll))
+			ok("Database", fmt.Sprintf("%s (%s, %d memories)", filepath.Join(".varve", "varve.db"), size, totalAll))
 
 			// 1b. The confirmation queue. A proposal that nobody sees is a
 			// quarantine with no exit (ADR-0001 D2, open question 3).
 			if pending := pendingProposalCount(k); pending > 0 {
 				warn("Pending decisions", fmt.Sprintf(
-					"%d awaiting confirmation — run 'memtrace decision pending' to review", pending))
+					"%d awaiting confirmation — run 'varve decision pending' to review", pending))
 			} else {
 				ok("Pending decisions", "none")
 			}
@@ -70,7 +70,7 @@ func newDoctorCmd() *cobra.Command {
 				if bad > 0 {
 					warn("Commit timestamps", fmt.Sprintf(
 						"%d observed commits have an unreadable timestamp and are "+
-							"excluded from attribution — re-run 'memtrace scan' after "+
+							"excluded from attribution — re-run 'varve scan' after "+
 							"upgrading, or report it", bad))
 				} else {
 					ok("Commit timestamps", "all observed commits are attributable")
@@ -79,7 +79,7 @@ func newDoctorCmd() *cobra.Command {
 
 			// 2. Stale memories
 			if staleCount > 0 {
-				warn("Stale memories", fmt.Sprintf("%d — run 'memtrace list --status stale' to review, or 'memtrace scan' to refresh", staleCount))
+				warn("Stale memories", fmt.Sprintf("%d — run 'varve list --status stale' to review, or 'varve scan' to refresh", staleCount))
 			} else {
 				ok("Stale memories", "none")
 			}
@@ -92,7 +92,7 @@ func newDoctorCmd() *cobra.Command {
 				ok("Embeddings", fmt.Sprintf("%s (%s)", embedProvider, embedModel))
 				unembedded, err := k.UnembeddedCount()
 				if err == nil && unembedded > 0 {
-					warn("Unembedded", fmt.Sprintf("%d memories have no vector — run 'memtrace reindex'", unembedded))
+					warn("Unembedded", fmt.Sprintf("%d memories have no vector — run 'varve reindex'", unembedded))
 				} else if err == nil {
 					ok("Unembedded", "all memories indexed")
 				}
@@ -154,12 +154,12 @@ func checkMCPConfig(projectRoot string, ok, warn, fail func(string, string)) {
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(data), "memtrace") {
+		if strings.Contains(string(data), "varve") {
 			ok("MCP config", fmt.Sprintf("found in %s", c.label))
 			return
 		}
 	}
-	warn("MCP config", "memtrace not found in any MCP config — run 'memtrace setup'")
+	warn("MCP config", "varve not found in any MCP config — run 'varve setup'")
 }
 
 func claudeUserMCPConfig() string {
@@ -171,12 +171,12 @@ func checkClaudeMD(projectRoot string, ok, warn func(string, string)) {
 	path := filepath.Join(projectRoot, "CLAUDE.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		warn("CLAUDE.md", "not found — run 'memtrace init' to add memtrace instructions")
+		warn("CLAUDE.md", "not found — run 'varve init' to add varve instructions")
 		return
 	}
-	if strings.Contains(string(data), "memtrace") || strings.Contains(string(data), "memory_save") {
-		ok("CLAUDE.md", "memtrace instructions present")
+	if strings.Contains(string(data), "varve") || strings.Contains(string(data), "memory_save") {
+		ok("CLAUDE.md", "varve instructions present")
 	} else {
-		warn("CLAUDE.md", "CLAUDE.md exists but has no memtrace instructions")
+		warn("CLAUDE.md", "CLAUDE.md exists but has no varve instructions")
 	}
 }

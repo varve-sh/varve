@@ -105,10 +105,10 @@ func newDecisionPendingCmd() *cobra.Command {
 					printDisposalRequest(r)
 					fmt.Println()
 				}
-				dim.Printf("Confirm with 'memtrace decision revert <id>', or leave it binding by doing nothing.\n")
+				dim.Printf("Confirm with 'varve decision revert <id>', or leave it binding by doing nothing.\n")
 			}
 			if len(ds) > 0 {
-				dim.Printf("Accept with 'memtrace decision accept <id>', decline with 'memtrace decision reject <id>'.\n")
+				dim.Printf("Accept with 'varve decision accept <id>', decline with 'varve decision reject <id>'.\n")
 			}
 			return nil
 		},
@@ -289,7 +289,7 @@ func newDecisionRevertCmd() *cobra.Command {
 			}
 			if current.Status == types.StatusProposed {
 				return fmt.Errorf("decision %s is still a proposal, so there is nothing to "+
-					"repeal — decline it with `memtrace decision reject %s`, which is also "+
+					"repeal — decline it with `varve decision reject %s`, which is also "+
 					"terminal but is the transition §D3 defines for a proposal", id, shortID(id))
 			}
 
@@ -450,7 +450,7 @@ func newDecisionPromoteCmd() *cobra.Command {
 			}
 			fmt.Printf("Proposed %s (%s): %s\n", d.ID, d.Kind, d.Title)
 			color.New(color.Faint).Printf(
-				"  the note stays live until you run 'memtrace decision accept %s'\n",
+				"  the note stays live until you run 'varve decision accept %s'\n",
 				shortID(d.ID))
 			return nil
 		},
@@ -481,7 +481,7 @@ func notProposedError(id string, status types.DecisionStatus, verb string) error
 			"Re-adopting a rule means a new decision citing this one", id, status, verb)
 	default:
 		return fmt.Errorf("decision %s is %s, and only a proposal can be %s — "+
-			"repeal a binding decision with `memtrace decision revert %s`",
+			"repeal a binding decision with `varve decision revert %s`",
 			id, status, verb, shortID(id))
 	}
 }

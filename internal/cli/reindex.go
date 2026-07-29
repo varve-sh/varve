@@ -11,7 +11,7 @@ func newReindexCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reindex",
 		Short: "Backfill embeddings for memories that have none stored",
-		Long:  "Computes and stores embeddings for all active memories with a missing embedding.\nRequires MEMTRACE_EMBED_KEY (or OPENAI_API_KEY) to be set.",
+		Long:  "Computes and stores embeddings for all active memories with a missing embedding.\nRequires VARVE_EMBED_KEY (or OPENAI_API_KEY) to be set.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			k, _, err := openKernel()
 			if err != nil {
@@ -22,7 +22,7 @@ func newReindexCmd() *cobra.Command {
 			dim := color.New(color.Faint)
 
 			if !k.HasEmbedder() {
-				fmt.Fprintln(cmd.ErrOrStderr(), "No embedder configured — set MEMTRACE_EMBED_KEY (or OPENAI_API_KEY) in your shell environment and re-run.")
+				fmt.Fprintln(cmd.ErrOrStderr(), "No embedder configured — set VARVE_EMBED_KEY (or OPENAI_API_KEY) in your shell environment and re-run.")
 				return nil
 			}
 

@@ -207,8 +207,8 @@ func (s *DecisionStore) purgeRedactTx(d *types.Decision, reason string) (*PurgeR
 // dishonest version of this feature.
 func PurgeResidue(projectRoot string) []string {
 	return []string{
-		projectRoot + "/.memtrace/memtrace.v1.bak.db (the v1 backup, kept indefinitely by design)",
-		projectRoot + "/.memtrace/migration-v1-export.json (the migration export)",
+		projectRoot + "/.varve/varve.v1.bak.db (the v1 backup, kept indefinitely by design)",
+		projectRoot + "/.varve/migration-v1-export.json (the migration export)",
 		"any copy outside this store — git history, chat logs, the agent's own context",
 	}
 }

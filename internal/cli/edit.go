@@ -38,7 +38,7 @@ func newEditCmd() *cobra.Command {
 			}
 
 			// Write content to a temp file
-			tmp, err := os.CreateTemp("", "memtrace-edit-*.txt")
+			tmp, err := os.CreateTemp("", "varve-edit-*.txt")
 			if err != nil {
 				return fmt.Errorf("creating temp file: %w", err)
 			}

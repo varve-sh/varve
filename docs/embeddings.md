@@ -1,24 +1,24 @@
 # Semantic Search & Embeddings
 
-`memory_recall` and `memtrace search` use **hybrid BM25 + semantic scoring** when an embedder is configured. The pipeline runs full-text search and vector similarity independently, merges the candidate pools, and reranks — so memories that match on meaning but not exact keywords still surface.
+`memory_recall` and `varve search` use **hybrid BM25 + semantic scoring** when an embedder is configured. The pipeline runs full-text search and vector similarity independently, merges the candidate pools, and reranks — so memories that match on meaning but not exact keywords still surface.
 
-Without an embedder, memtrace falls back to BM25-only search, which is still fast and useful.
+Without an embedder, varve falls back to BM25-only search, which is still fast and useful.
 
 ---
 
 ## Zero-config with Ollama
 
-If [Ollama](https://ollama.com) is running locally, memtrace detects it automatically — no configuration needed:
+If [Ollama](https://ollama.com) is running locally, varve detects it automatically — no configuration needed:
 
 ```bash
 ollama pull nomic-embed-text
-# memtrace picks it up on next start
+# varve picks it up on next start
 ```
 
 Verify:
 
 ```bash
-memtrace status
+varve status
 # Embeddings: ollama (nomic-embed-text)
 ```
 
@@ -26,17 +26,17 @@ memtrace status
 
 ## OpenAI (or any compatible API)
 
-Store the API key in memtrace's config so both the CLI and MCP server pick it up:
+Store the API key in varve's config so both the CLI and MCP server pick it up:
 
 ```bash
-memtrace config set embed.key sk-...
-memtrace config set embed.model text-embedding-3-small   # optional, this is the default
+varve config set embed.key sk-...
+varve config set embed.model text-embedding-3-small   # optional, this is the default
 ```
 
 Or pass it via environment variable:
 
 ```bash
-export MEMTRACE_EMBED_KEY=sk-...
+export VARVE_EMBED_KEY=sk-...
 ```
 
 ---
@@ -46,26 +46,26 @@ export MEMTRACE_EMBED_KEY=sk-...
 Any OpenAI-compatible endpoint works without an API key:
 
 ```bash
-memtrace config set embed.url http://localhost:8080/v1
-memtrace config set embed.model my-model
+varve config set embed.url http://localhost:8080/v1
+varve config set embed.model my-model
 ```
 
-Memtrace sends a placeholder auth header that local servers ignore.
+Varve sends a placeholder auth header that local servers ignore.
 
 ---
 
 ## Passing the key via your MCP client
 
-Add `env` to your MCP config entry so the key is available when `memtrace serve` runs:
+Add `env` to your MCP config entry so the key is available when `varve serve` runs:
 
 ```json
 {
   "mcpServers": {
-    "memtrace": {
-      "command": "memtrace",
+    "varve": {
+      "command": "varve",
       "args": ["serve"],
       "env": {
-        "MEMTRACE_EMBED_KEY": "sk-..."
+        "VARVE_EMBED_KEY": "sk-..."
       }
     }
   }
@@ -79,7 +79,7 @@ Add `env` to your MCP config entry so the key is available when `memtrace serve`
 Memories saved before an embedder was configured have no stored vector. Run `reindex` once to backfill:
 
 ```bash
-memtrace reindex
+varve reindex
 ```
 
 ---
@@ -87,8 +87,8 @@ memtrace reindex
 ## Disabling semantic search
 
 ```bash
-memtrace config set embed.provider disabled
-# or: MEMTRACE_EMBED_PROVIDER=disabled
+varve config set embed.provider disabled
+# or: VARVE_EMBED_PROVIDER=disabled
 ```
 
 ---
@@ -99,10 +99,10 @@ Environment variables always override config file values.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MEMTRACE_EMBED_KEY` | — | API key. Falls back to `OPENAI_API_KEY`. |
-| `MEMTRACE_EMBED_URL` | `https://api.openai.com/v1` | Base URL of the embeddings API. |
-| `MEMTRACE_EMBED_MODEL` | `text-embedding-3-small` | Model name. |
-| `MEMTRACE_EMBED_PROVIDER` | `auto` | Set to `disabled` to turn off embeddings entirely. |
+| `VARVE_EMBED_KEY` | — | API key. Falls back to `OPENAI_API_KEY`. |
+| `VARVE_EMBED_URL` | `https://api.openai.com/v1` | Base URL of the embeddings API. |
+| `VARVE_EMBED_MODEL` | `text-embedding-3-small` | Model name. |
+| `VARVE_EMBED_PROVIDER` | `auto` | Set to `disabled` to turn off embeddings entirely. |
 
 ---
 

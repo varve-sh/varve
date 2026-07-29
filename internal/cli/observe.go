@@ -28,7 +28,7 @@ func newObserveCmd() *cobra.Command {
 		Long: "Reads a commit's files, message and patch-id and records what it did to " +
 			"the decisions whose scope it touched (ADR-0004 §D1).\n\n" +
 			"This is what the post-commit hook runs. It exits 0 whatever happens: " +
-			"losing one observation is acceptable because `memtrace scan` picks it up, " +
+			"losing one observation is acceptable because `varve scan` picks it up, " +
 			"and a hook that fails or prints is a hook a user removes.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -69,7 +69,7 @@ func newObserveCmd() *cobra.Command {
 }
 
 // observeFailure is §D7's failure posture: the observer's own errors go to
-// .memtrace/observer.log and never to the user's terminal.
+// .varve/observer.log and never to the user's terminal.
 //
 // A missed observation is recoverable — `scan`'s cursor is the absence of the
 // diff.observed row, so the next scan picks the commit up — and that is
@@ -87,7 +87,7 @@ func logObserverError(projectRoot string, err error) {
 	if projectRoot == "" || err == nil {
 		return
 	}
-	path := filepath.Join(projectRoot, ".memtrace", "observer.log")
+	path := filepath.Join(projectRoot, ".varve", "observer.log")
 	f, openErr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if openErr != nil {
 		return

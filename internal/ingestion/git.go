@@ -22,7 +22,7 @@ func ImportGitHistory(projectRoot string, maxCommits int) ([]types.MemorySaveInp
 	}
 
 	cmd := exec.Command("git", "log",
-		"--format=%H%n%s%n%b%n---MEMTRACE_END---",
+		"--format=%H%n%s%n%b%n---VARVE_END---",
 		"-n", fmt.Sprintf("%d", maxCommits),
 	)
 	cmd.Dir = projectRoot
@@ -33,7 +33,7 @@ func ImportGitHistory(projectRoot string, maxCommits int) ([]types.MemorySaveInp
 	}
 
 	var results []types.MemorySaveInput
-	blocks := strings.Split(string(out), "---MEMTRACE_END---")
+	blocks := strings.Split(string(out), "---VARVE_END---")
 	for _, block := range blocks {
 		block = strings.TrimSpace(block)
 		if block == "" {

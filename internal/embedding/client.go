@@ -3,9 +3,9 @@
 //
 // Configuration (environment variables):
 //
-//	MEMTRACE_EMBED_URL   Base URL of the embeddings API (default: https://api.openai.com/v1)
-//	MEMTRACE_EMBED_MODEL Embedding model name        (default: text-embedding-3-small)
-//	MEMTRACE_EMBED_KEY   API key (falls back to OPENAI_API_KEY)
+//	VARVE_EMBED_URL   Base URL of the embeddings API (default: https://api.openai.com/v1)
+//	VARVE_EMBED_MODEL Embedding model name        (default: text-embedding-3-small)
+//	VARVE_EMBED_KEY   API key (falls back to OPENAI_API_KEY)
 package embedding
 
 import (
@@ -44,10 +44,10 @@ func (c *Client) Model() string { return c.model }
 // Returns nil if no API key is configured — callers treat nil as "embeddings disabled".
 func NewClientFromEnv() *Client {
 	return NewClient(
-		os.Getenv("MEMTRACE_EMBED_KEY"),
+		os.Getenv("VARVE_EMBED_KEY"),
 		os.Getenv("OPENAI_API_KEY"),
-		os.Getenv("MEMTRACE_EMBED_URL"),
-		os.Getenv("MEMTRACE_EMBED_MODEL"),
+		os.Getenv("VARVE_EMBED_URL"),
+		os.Getenv("VARVE_EMBED_MODEL"),
 	)
 }
 

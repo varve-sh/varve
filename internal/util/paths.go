@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 )
 
-// GetConfigDir returns the OS-appropriate config directory for memtrace.
-//   - macOS:   $HOME/Library/Application Support/memtrace
-//   - Linux:   $XDG_CONFIG_HOME/memtrace  (fallback: $HOME/.config/memtrace)
-//   - Windows: %AppData%\memtrace
+// GetConfigDir returns the OS-appropriate config directory for varve.
+//   - macOS:   $HOME/Library/Application Support/varve
+//   - Linux:   $XDG_CONFIG_HOME/varve  (fallback: $HOME/.config/varve)
+//   - Windows: %AppData%\varve
 func GetConfigDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -16,7 +16,7 @@ func GetConfigDir() string {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "memtrace")
+	return filepath.Join(dir, "varve")
 }
 
 // GetConfigPath returns the full path to config.json.

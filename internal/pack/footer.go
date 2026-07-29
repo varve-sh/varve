@@ -17,7 +17,7 @@ import (
 
 // ProposedFooter renders ADR-0002 §P8's proposed-decisions footer line:
 //
-//	-- proposed decisions touching these files: 2 (01J2H..., 01J1G...) — review with `memtrace decision accept`
+//	-- proposed decisions touching these files: 2 (01J2H..., 01J1G...) — review with `varve decision accept`
 //
 // It is the shared contract between `memory_pack` and `memory_context`
 // (decisions log, 2026-07-28 ruling): one serializer, so the two tools cannot
@@ -52,6 +52,6 @@ func ProposedFooter(ids []string, maxIDs int) string {
 		}
 		b.WriteString(")")
 	}
-	b.WriteString(" — not binding until accepted; review with `memtrace decision accept <id>`")
+	b.WriteString(" — not binding until accepted; review with `varve decision accept <id>`")
 	return b.String()
 }

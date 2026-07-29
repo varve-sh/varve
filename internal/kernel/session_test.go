@@ -16,7 +16,7 @@ import (
 
 func sessionKernel(t *testing.T) *MemoryKernel {
 	t.Helper()
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := New(filepath.Join(t.TempDir(), "s.db"), testProject)
 	if err := k.Open(); err != nil {
 		t.Fatalf("open: %v", err)
@@ -89,7 +89,7 @@ func TestSession_CLIRecallIsAttributableAndMarkedCLI(t *testing.T) {
 	}
 }
 
-// A registered-but-silent invocation (`memtrace list`) writes no session rows:
+// A registered-but-silent invocation (`varve list`) writes no session rows:
 // two events per invocation to say nothing happened is log noise, and §D3 only
 // requires CLI operations to be identifiable when they emit something.
 func TestSession_SilentInvocationWritesNoSessionRows(t *testing.T) {

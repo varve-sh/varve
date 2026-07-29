@@ -28,7 +28,7 @@ that has no diff.observed row yet — judging each against the decisions whose
 scope it touches (ADR-0004 §D1.2).
 
 This is the half of the observer that makes the record complete: commits made
-before memtrace was installed, pulled from a teammate, made with the hook
+before varve was installed, pulled from a teammate, made with the hook
 bypassed, or missed because the database was busy. It runs automatically in
 the background at every MCP session start; this command is the manual door.
 
@@ -73,7 +73,7 @@ the background at every MCP session start; this command is the manual door.
 			}
 			if res.SkippedPreEpoch > 0 {
 				dim.Printf("  %d commits predate this store and were skipped — "+
-					"`memtrace scan --backfill` observes them, marked and excluded from reports\n",
+					"`varve scan --backfill` observes them, marked and excluded from reports\n",
 					res.SkippedPreEpoch)
 			}
 			for _, e := range res.Errors {
@@ -133,14 +133,14 @@ func runStalenessScan(k *kernel.MemoryKernel, projectRoot string) error {
 			dim.Printf(" (%d unchanged)", unchanged)
 		}
 		fmt.Println(".")
-		fmt.Println("Run 'memtrace list --status stale' to review.")
+		fmt.Println("Run 'varve list --status stale' to review.")
 	default:
 		fmt.Printf("%d memories marked stale", res.Marked)
 		if unchanged > 0 {
 			dim.Printf(" (%d unchanged)", unchanged)
 		}
 		fmt.Println(".")
-		fmt.Println("Run 'memtrace list --status stale' to review.")
+		fmt.Println("Run 'varve list --status stale' to review.")
 	}
 	return nil
 }

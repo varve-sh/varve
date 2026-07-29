@@ -1,14 +1,14 @@
 .PHONY: build test lint clean install snapshot release
 
-BINARY   = memtrace
+BINARY   = varve
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS  = -ldflags "-s -w -X main.version=$(VERSION)"
 
 build:
-	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(BINARY) ./cmd/memtrace
+	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(BINARY) ./cmd/varve
 
 test:
-	MEMTRACE_EMBED_PROVIDER=disabled go test ./... -count=1
+	VARVE_EMBED_PROVIDER=disabled go test ./... -count=1
 
 lint:
 	go vet ./...

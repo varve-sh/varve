@@ -372,7 +372,7 @@ var ErrUnknownImportBatch = errors.New("no import batch with that id")
 // packer, to recall defaults and to attribution, with the audit record intact.
 //
 // Membership in a batch is decided from **import provenance**, never from the
-// batch tag alone (F45). The tag is user-writable, `memtrace export` preserves
+// batch tag alone (F45). The tag is user-writable, `varve export` preserves
 // it, and the documented export→import round trip therefore carries foreign
 // batch tags into other stores — so a tag-only membership test can be handed
 // rows the batch never created. A note is deleted only if it is tagged AND was

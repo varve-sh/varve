@@ -1,6 +1,6 @@
-# memtrace
+# varve
 
-This project has the **memtrace MCP server** connected. Use its tools for **all** memory operations — never use built-in memory tools or write to ~/.claude/projects/.
+This project has the **varve MCP server** connected. Use its tools for **all** memory operations — never use built-in memory tools or write to ~/.claude/projects/.
 
 ## Memory tools
 
@@ -26,16 +26,16 @@ This project has the **memtrace MCP server** connected. Use its tools for **all*
 
 - **`memory_save`** with `type=decision` or `convention` creates a row with
   status **`proposed`**. It does not bind, and `memory_context` will not return
-  it as context. A human runs `memtrace decision accept <id>` to make it
+  it as context. A human runs `varve decision accept <id>` to make it
   binding. Say the proposal is waiting; do not report it as adopted.
 - **`memory_save`** with `type=fact` or `event` creates a **note** — `fact` and
   `event` are synonyms for `note`: retrievable, ungoverned, no lifecycle.
-  `memory_update` cannot turn a note into a decision; `memtrace decision
+  `memory_update` cannot turn a note into a decision; `varve decision
   promote <note-id>` does, and it is a human action.
 - **`memory_forget`** on a note deletes it. On a decision or convention it
   deletes nothing and changes no status: it records a **disposal request** and
-  returns it as pending. A human confirms with `memtrace decision reject <id>`
-  while the decision is proposed, or `memtrace decision revert <id>` once it is
+  returns it as pending. A human confirms with `varve decision reject <id>`
+  while the decision is proposed, or `varve decision revert <id>` once it is
   binding. Tell the user the request is waiting for them.
 - **`memory_recall`** and **`memory_get`** return proposals, marked
   `PROPOSED`. They are the review surface — treat anything so marked as a

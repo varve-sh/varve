@@ -36,7 +36,7 @@ type v1Row struct {
 func populatedV1DB(t *testing.T) (string, []v1Row) {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "memtrace.db")
+	path := filepath.Join(dir, "varve.db")
 
 	db, err := OpenDB(path)
 	if err != nil {
@@ -442,7 +442,7 @@ func TestMigrateFromV1_RefusesANonV1Database(t *testing.T) {
 // is required). It is skipped, named in the report, and counted.
 func TestMigrateFromV1_SkippedRowsAreCountedAndNamed(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "memtrace.db")
+	path := filepath.Join(dir, "varve.db")
 	db, _ := OpenDB(path)
 	if _, err := db.Exec(baselineV1SQL); err != nil {
 		t.Fatal(err)

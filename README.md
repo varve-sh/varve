@@ -1,21 +1,21 @@
 <p align="left">
-  <img src="logo.svg" alt="memtrace" width="180" />
+  <img src="logo.svg" alt="varve" width="180" />
 </p>
 
-# memtrace
-[memtrace.sh](https://memtrace.sh) · Persistent, searchable memory for AI coding agents — local, fast, zero-config.
+# varve
+[varve.sh](https://varve.sh) · Persistent, searchable memory for AI coding agents — local, fast, zero-config.
 
-Memtrace gives Claude Code, Cursor, Windsurf, and any MCP-compatible agent a memory that survives every new session. Decisions, conventions, and codebase knowledge are there the next time you open a chat.
+Varve gives Claude Code, Cursor, Windsurf, and any MCP-compatible agent a memory that survives every new session. Decisions, conventions, and codebase knowledge are there the next time you open a chat.
 
 ---
 
 ## Install
 
 ```bash
-brew install memtrace-dev/tap/memtrace
+brew install varve-sh/tap/varve
 ```
 
-Or: `go install github.com/memtrace-dev/memtrace/cmd/memtrace@latest` · [prebuilt binaries](https://github.com/memtrace-dev/memtrace/releases/latest)
+Or: `go install github.com/memtrace-dev/memtrace/cmd/varve@latest` · [prebuilt binaries](https://github.com/memtrace-dev/memtrace/releases/latest)
 
 ---
 
@@ -24,10 +24,10 @@ Or: `go install github.com/memtrace-dev/memtrace/cmd/memtrace@latest` · [prebui
 ```bash
 # 1. Initialize in your project
 cd your-project
-memtrace init
+varve init
 
 # 2. Wire up your agent
-memtrace setup          # auto-detects Claude Code, Cursor, Windsurf, VS Code, OpenCode, Gemini CLI
+varve setup          # auto-detects Claude Code, Cursor, Windsurf, VS Code, OpenCode, Gemini CLI
 
 # 3. Start a new session — memory is live
 ```
@@ -49,16 +49,16 @@ Session 2 (new chat, blank context)
   ← "Auth middleware lives in src/middleware/auth.go"
 ```
 
-All data lives in `.memtrace/memtrace.db` — SQLite, local only, no account required.
+All data lives in `.varve/varve.db` — SQLite, local only, no account required.
 
 ---
 
-## Why memtrace
+## Why varve
 
 - **Hybrid search** — BM25 full-text + vector semantic search. Finds memories even when you use different words.
 - **File-aware context** — `memory_context(file_paths)` surfaces conventions and decisions linked to the files you're editing.
 - **Confidence decay** — memories age gracefully. Recalled memories stay fresh; stale ones fade.
-- **Staleness detection** — `memtrace scan` flags memories whose referenced files have changed.
+- **Staleness detection** — `varve scan` flags memories whose referenced files have changed.
 - **Private content** — wrap sensitive details in `<private>...</private>` and they're stripped before storage.
 - **Works everywhere** — one binary, no daemon, no Docker. Sets up in any editor in one command.
 
@@ -86,7 +86,7 @@ All data lives in `.memtrace/memtrace.db` — SQLite, local only, no account req
 |---|---|
 | [MCP Tools](docs/mcp-tools.md) | All tools, parameters, and examples |
 | [CLI Reference](docs/cli.md) | Every command with flags |
-| [Agent Setup](docs/setup.md) | Wire memtrace into Claude Code, Cursor, Windsurf, VS Code, OpenCode, Gemini CLI |
+| [Agent Setup](docs/setup.md) | Wire varve into Claude Code, Cursor, Windsurf, VS Code, OpenCode, Gemini CLI |
 | [Semantic Search](docs/embeddings.md) | Ollama, OpenAI, custom endpoints, env vars |
 | [Import & Export](docs/import-export.md) | JSON and Markdown, round-trip, dry run |
 | [Concepts](docs/concepts.md) | Memory types, confidence decay, staleness, private content |
@@ -96,7 +96,7 @@ All data lives in `.memtrace/memtrace.db` — SQLite, local only, no account req
 ## Development
 
 ```bash
-make build      # build binary to bin/memtrace
+make build      # build binary to bin/varve
 make install    # build and copy to $GOPATH/bin
 make test       # run all tests
 make snapshot   # cross-platform build via goreleaser (no publish)

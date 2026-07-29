@@ -17,14 +17,14 @@ import (
 	"github.com/memtrace-dev/memtrace/internal/util"
 )
 
-// setupProject creates a temp directory that looks like an initialized memtrace
+// setupProject creates a temp directory that looks like an initialized varve
 // project. It returns the project root and a kernel pre-populated with the
 // provided memories. The test's cwd is changed to the project root for the
 // duration of the test.
 func setupProject(t *testing.T, memories ...types.MemorySaveInput) (*kernel.MemoryKernel, string) {
 	t.Helper()
 
-	// Isolate ~/.config/memtrace to a temp home so we don't pollute the real one
+	// Isolate ~/.config/varve to a temp home so we don't pollute the real one
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -38,8 +38,8 @@ func setupProject(t *testing.T, memories ...types.MemorySaveInput) (*kernel.Memo
 	}
 	root = realRoot
 
-	// Create .memtrace directory
-	if err := os.MkdirAll(filepath.Join(root, ".memtrace"), 0755); err != nil {
+	// Create .varve directory
+	if err := os.MkdirAll(filepath.Join(root, ".varve"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,7 +163,7 @@ func TestSaveCmd_NotInitialized(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	// Temp dir with no .memtrace/ and no .git/
+	// Temp dir with no .varve/ and no .git/
 	bare := t.TempDir()
 	orig, _ := os.Getwd()
 	os.Chdir(bare)
@@ -713,10 +713,10 @@ func TestReindexCmd_NoEmbedder(t *testing.T) {
 	setupProject(t,
 		types.MemorySaveInput{Content: "memory without embedder"},
 	)
-	t.Setenv("MEMTRACE_EMBED_KEY", "")
+	t.Setenv("VARVE_EMBED_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("MEMTRACE_EMBED_URL", "")
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_URL", "")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
 	// Output goes to stderr for the "no embedder" message; runCmd captures stdout.
 	// We just verify the command exits without error and stdout is empty/benign.
@@ -747,9 +747,9 @@ func TestReindexCmd_WithEmbedder(t *testing.T) {
 	)
 
 	// Enable the embedder for the reindex run.
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "")
-	t.Setenv("MEMTRACE_EMBED_KEY", "test-key")
-	t.Setenv("MEMTRACE_EMBED_URL", srv.URL)
+	t.Setenv("VARVE_EMBED_PROVIDER", "")
+	t.Setenv("VARVE_EMBED_KEY", "test-key")
+	t.Setenv("VARVE_EMBED_URL", srv.URL)
 
 	out, err := runCmd(t, "reindex")
 	if err != nil {
@@ -766,13 +766,13 @@ func TestDoctorCmd_AllOK(t *testing.T) {
 	_, root := setupProject(t,
 		types.MemorySaveInput{Content: "We use JWT", Type: types.MemoryTypeDecision},
 	)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
-	// Write a CLAUDE.md with memtrace instructions.
+	// Write a CLAUDE.md with varve instructions.
 	os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("Use memory_save to store decisions."), 0644)
-	// Write a .claude/mcp.json referencing memtrace.
+	// Write a .claude/mcp.json referencing varve.
 	os.MkdirAll(filepath.Join(root, ".claude"), 0755)
-	os.WriteFile(filepath.Join(root, ".claude", "mcp.json"), []byte(`{"mcpServers":{"memtrace":{"command":"memtrace","args":["serve"]}}}`), 0644)
+	os.WriteFile(filepath.Join(root, ".claude", "mcp.json"), []byte(`{"mcpServers":{"varve":{"command":"varve","args":["serve"]}}}`), 0644)
 
 	out, err := runCmd(t, "doctor")
 	if err != nil {
@@ -791,12 +791,12 @@ func TestDoctorCmd_AllOK(t *testing.T) {
 
 func TestDoctorCmd_StaleWarning(t *testing.T) {
 	_, root := setupProject(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
 	// Write CLAUDE.md and MCP config to avoid those warnings.
 	os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("memory_save"), 0644)
 	os.MkdirAll(filepath.Join(root, ".claude"), 0755)
-	os.WriteFile(filepath.Join(root, ".claude", "mcp.json"), []byte(`{"mcpServers":{"memtrace":{}}}`), 0644)
+	os.WriteFile(filepath.Join(root, ".claude", "mcp.json"), []byte(`{"mcpServers":{"varve":{}}}`), 0644)
 
 	// Create a memory referencing a file, then delete the file so scan marks it stale.
 	tmpFile := filepath.Join(root, "tmp.go")
@@ -828,7 +828,7 @@ func TestDoctorCmd_StaleWarning(t *testing.T) {
 
 func TestDoctorCmd_MissingMCPConfig(t *testing.T) {
 	_, root := setupProject(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("memory_save"), 0644)
 	// No MCP config files.
 
@@ -843,9 +843,9 @@ func TestDoctorCmd_MissingMCPConfig(t *testing.T) {
 
 func TestDoctorCmd_MissingCLAUDEMD(t *testing.T) {
 	_, root := setupProject(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	os.MkdirAll(filepath.Join(root, ".claude"), 0755)
-	os.WriteFile(filepath.Join(root, ".claude", "mcp.json"), []byte(`{"mcpServers":{"memtrace":{}}}`), 0644)
+	os.WriteFile(filepath.Join(root, ".claude", "mcp.json"), []byte(`{"mcpServers":{"varve":{}}}`), 0644)
 	// No CLAUDE.md.
 
 	out, err := runCmd(t, "doctor")
@@ -864,7 +864,7 @@ func TestStatsCmd_Basic(t *testing.T) {
 		types.MemorySaveInput{Content: "We use JWT", Type: types.MemoryTypeDecision},
 		types.MemorySaveInput{Content: "Error handling convention", Type: types.MemoryTypeConvention},
 	)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
 	out, err := runCmd(t, "stats")
 	if err != nil {
@@ -885,7 +885,7 @@ func TestStatsCmd_JSON(t *testing.T) {
 	setupProject(t,
 		types.MemorySaveInput{Content: "We use PostgreSQL", Type: types.MemoryTypeFact},
 	)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
 	out, err := runCmd(t, "stats", "--json")
 	if err != nil {
@@ -905,7 +905,7 @@ func TestStatsCmd_JSON(t *testing.T) {
 
 func TestStatsCmd_CustomDays(t *testing.T) {
 	setupProject(t)
-	t.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
 	out, err := runCmd(t, "stats", "--days", "30")
 	if err != nil {

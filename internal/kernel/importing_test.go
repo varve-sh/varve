@@ -271,7 +271,7 @@ func TestUndoImport_DefaultsToLatestBatch(t *testing.T) {
 }
 
 // F45: undo resolves membership from import provenance, not from the batch tag.
-// The tag is user-writable and `memtrace export` preserves it, so a store can
+// The tag is user-writable and `varve export` preserves it, so a store can
 // legitimately hold rows wearing another store's batch label.
 func TestUndoImport_SparesRowsItDidNotCreate(t *testing.T) {
 	k := setupTestKernel(t)

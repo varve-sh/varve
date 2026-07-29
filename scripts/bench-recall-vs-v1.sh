@@ -17,7 +17,7 @@ set -eu
 BENCHTIME="${1:-100x}"
 COUNT="${2:-3}"
 V1_REF="${V1_REF:-f135a72}"   # last commit before the v2 schema landed
-WORKTREE="${WORKTREE:-/tmp/memtrace-bench-v1}"
+WORKTREE="${WORKTREE:-/tmp/varve-bench-v1}"
 
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"

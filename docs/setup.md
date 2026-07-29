@@ -1,9 +1,9 @@
 # Agent Setup
 
-`memtrace setup` writes the MCP config entry for your agent. It is idempotent — running it again is safe and merges into existing configs without overwriting other entries.
+`varve setup` writes the MCP config entry for your agent. It is idempotent — running it again is safe and merges into existing configs without overwriting other entries.
 
 ```bash
-memtrace setup   # auto-detect from .claude/, .cursor/, .vscode/, opencode.json, .gemini/
+varve setup   # auto-detect from .claude/, .cursor/, .vscode/, opencode.json, .gemini/
 ```
 
 ---
@@ -13,7 +13,7 @@ memtrace setup   # auto-detect from .claude/, .cursor/, .vscode/, opencode.json,
 **Project scope** (recommended — memory is scoped to this project):
 
 ```bash
-memtrace setup claude-code
+varve setup claude-code
 ```
 
 Writes to `.claude/mcp.json`:
@@ -21,8 +21,8 @@ Writes to `.claude/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "memtrace": {
-      "command": "memtrace",
+    "varve": {
+      "command": "varve",
       "args": ["serve"]
     }
   }
@@ -32,7 +32,7 @@ Writes to `.claude/mcp.json`:
 **User scope** (all projects):
 
 ```bash
-memtrace setup --global
+varve setup --global
 ```
 
 Writes to `~/.claude/mcp.json`.
@@ -42,7 +42,7 @@ Writes to `~/.claude/mcp.json`.
 ## Cursor
 
 ```bash
-memtrace setup cursor
+varve setup cursor
 ```
 
 Writes to `.cursor/mcp.json` (same format as Claude Code).
@@ -52,7 +52,7 @@ Writes to `.cursor/mcp.json` (same format as Claude Code).
 ## VS Code (Copilot)
 
 ```bash
-memtrace setup vscode
+varve setup vscode
 ```
 
 Writes to `.vscode/mcp.json`:
@@ -60,9 +60,9 @@ Writes to `.vscode/mcp.json`:
 ```json
 {
   "servers": {
-    "memtrace": {
+    "varve": {
       "type": "stdio",
-      "command": "memtrace",
+      "command": "varve",
       "args": ["serve"]
     }
   }
@@ -74,7 +74,7 @@ Writes to `.vscode/mcp.json`:
 ## OpenCode
 
 ```bash
-memtrace setup opencode
+varve setup opencode
 ```
 
 Writes to `opencode.json` in the project root:
@@ -82,9 +82,9 @@ Writes to `opencode.json` in the project root:
 ```json
 {
   "mcp": {
-    "memtrace": {
+    "varve": {
       "type": "local",
-      "command": ["memtrace", "serve"]
+      "command": ["varve", "serve"]
     }
   }
 }
@@ -95,7 +95,7 @@ Writes to `opencode.json` in the project root:
 ## Windsurf
 
 ```bash
-memtrace setup windsurf
+varve setup windsurf
 ```
 
 Writes to `~/.codeium/windsurf/mcp_config.json` (global — Windsurf doesn't support project-scoped MCP config):
@@ -103,8 +103,8 @@ Writes to `~/.codeium/windsurf/mcp_config.json` (global — Windsurf doesn't sup
 ```json
 {
   "mcpServers": {
-    "memtrace": {
-      "command": "memtrace",
+    "varve": {
+      "command": "varve",
       "args": ["serve"]
     }
   }
@@ -116,7 +116,7 @@ Writes to `~/.codeium/windsurf/mcp_config.json` (global — Windsurf doesn't sup
 ## Gemini CLI
 
 ```bash
-memtrace setup gemini
+varve setup gemini
 ```
 
 Writes to `.gemini/settings.json` in the project root:
@@ -124,8 +124,8 @@ Writes to `.gemini/settings.json` in the project root:
 ```json
 {
   "mcpServers": {
-    "memtrace": {
-      "command": "memtrace",
+    "varve": {
+      "command": "varve",
       "args": ["serve"]
     }
   }
@@ -136,16 +136,16 @@ Writes to `.gemini/settings.json` in the project root:
 
 ## Passing environment variables
 
-To configure the embeddings API key through the MCP client (so you don't need `memtrace config set`), add `env` to the config entry manually:
+To configure the embeddings API key through the MCP client (so you don't need `varve config set`), add `env` to the config entry manually:
 
 ```json
 {
   "mcpServers": {
-    "memtrace": {
-      "command": "memtrace",
+    "varve": {
+      "command": "varve",
       "args": ["serve"],
       "env": {
-        "MEMTRACE_EMBED_KEY": "sk-..."
+        "VARVE_EMBED_KEY": "sk-..."
       }
     }
   }
@@ -156,10 +156,10 @@ To configure the embeddings API key through the MCP client (so you don't need `m
 
 ## CLAUDE.md instructions
 
-`memtrace init` automatically appends instructions to `CLAUDE.md` directing Claude to use memtrace tools instead of its built-in memory. If you skip init or use a different agent, add this to your project's system prompt or rules file:
+`varve init` automatically appends instructions to `CLAUDE.md` directing Claude to use varve tools instead of its built-in memory. If you skip init or use a different agent, add this to your project's system prompt or rules file:
 
 ```
-This project has the memtrace MCP server connected. Use memory_save, memory_recall,
+This project has the varve MCP server connected. Use memory_save, memory_recall,
 memory_get, memory_forget, memory_update, memory_context, and memory_prompt for all
 memory operations — do not use built-in memory tools.
 ```

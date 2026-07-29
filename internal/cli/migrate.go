@@ -75,7 +75,7 @@ func legacyDatabaseHint(err error) error {
 	if errors.Is(err, types.ErrLegacyDatabase) {
 		return fmt.Errorf(
 			"this project still uses the v1 schema.\n\n" +
-				"  run:  memtrace migrate --from-v1\n\n" +
+				"  run:  varve migrate --from-v1\n\n" +
 				"Your v1 database is moved aside and kept; nothing is deleted")
 	}
 	return err

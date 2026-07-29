@@ -38,7 +38,7 @@ import (
 //     planning/decisions-log.md as unfalsified with a reproducible harness,
 //     not as passed.
 func BenchmarkRecall(b *testing.B) {
-	b.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	b.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := New(filepath.Join(b.TempDir(), "bench.db"), testProject)
 	if err := k.Open(); err != nil {
 		b.Fatal(err)
@@ -82,7 +82,7 @@ func BenchmarkRecall(b *testing.B) {
 // third of them scope-matching the request — so the number is the ceiling of
 // what a repo-local store can cost, not a favourable sample.
 func BenchmarkPack(b *testing.B) {
-	b.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	b.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	k := New(filepath.Join(b.TempDir(), "packbench.db"), testProject)
 	if err := k.Open(); err != nil {
 		b.Fatal(err)

@@ -34,8 +34,8 @@ import (
 // The export→reimport shortcut must not be extended to any future version
 // bump. Migrations 3+ go through migrate.go, always.
 //
-// NAMING — the paths below are still `.memtrace/`. ADR-0001 §D9 writes them as
-// `.varve/`; the rename (.memtrace/ → .varve/, MEMTRACE_* → VARVE_*, module
+// NAMING — the paths below are still `.varve/`. ADR-0001 §D9 writes them as
+// `.varve/`; the rename (.varve/ → .varve/, VARVE_* → VARVE_*, module
 // path) is a separate, later commit per the decisions log entry "Phase 1 open
 // items closed", and this command is its natural boundary. Only the strings
 // change when it lands.
@@ -92,7 +92,7 @@ func (r *MigrationReport) String() string {
 	fmt.Fprintf(&b, "  export     %s\n", r.ExportPath)
 	if len(r.NeedsTriage) > 0 {
 		fmt.Fprintf(&b, "\n%d stale v1 decisions came over as `proposed` and need re-confirmation.\n"+
-			"Review them with `memtrace decision pending`, then `memtrace decision accept|reject <id>`.\n",
+			"Review them with `varve decision pending`, then `varve decision accept|reject <id>`.\n",
 			len(r.NeedsTriage))
 	}
 	if len(r.Unevidenced) > 0 {

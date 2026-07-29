@@ -15,7 +15,7 @@ const (
 	MemoryTypeNote MemoryType = "note"
 	// MemoryTypeFact and MemoryTypeEvent remain accepted on *input*, as
 	// synonyms for MemoryTypeNote, so deployed agent-instruction templates and
-	// `memtrace save --type fact` keep working. Nothing reads them back.
+	// `varve save --type fact` keep working. Nothing reads them back.
 	MemoryTypeFact  MemoryType = "fact"
 	MemoryTypeEvent MemoryType = "event"
 )
@@ -179,7 +179,7 @@ type FTSResult struct {
 	Rank float64
 }
 
-// Project represents a registered memtrace project.
+// Project represents a registered varve project.
 type Project struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`

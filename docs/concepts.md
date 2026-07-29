@@ -11,7 +11,7 @@
 | `fact` | Durable truths about the codebase |
 | `event` | Migrations, incidents, refactors, session summaries, prompts |
 
-If you don't specify a type, memtrace defaults to `fact`.
+If you don't specify a type, varve defaults to `fact`.
 
 ---
 
@@ -26,7 +26,7 @@ This means stale, never-accessed memories naturally sink in search results over 
 **Manual override** — you can set confidence explicitly:
 
 ```bash
-memtrace update 01KMDX71NT --confidence 0.5
+varve update 01KMDX71NT --confidence 0.5
 ```
 
 ```
@@ -37,10 +37,10 @@ memory_update(id: "01KMDX71NT...", confidence: 0.5)
 
 ## Staleness detection
 
-Memories that reference source files can go stale when those files change. Run `memtrace scan` to check:
+Memories that reference source files can go stale when those files change. Run `varve scan` to check:
 
 ```bash
-memtrace scan
+varve scan
 ```
 
 ```
@@ -55,7 +55,7 @@ A memory is marked stale when any of its `file_paths` has been deleted or modifi
 Review with:
 
 ```bash
-memtrace list --status stale
+varve list --status stale
 ```
 
 Then edit, update, or delete them.
@@ -103,7 +103,7 @@ Good topic keys are hierarchical and stable: `decision/auth`, `convention/error-
 
 ## Session auto-summarization
 
-When an MCP session ends, memtrace automatically saves a compact `event` memory recording what happened — but only if at least one memory was written. Read-only sessions produce no noise.
+When an MCP session ends, varve automatically saves a compact `event` memory recording what happened — but only if at least one memory was written. Read-only sessions produce no noise.
 
 ```
 Session 2026-03-23T14:32Z (45m): saved 3 memories — "We use JWT with RS256" [decision],
@@ -113,14 +113,14 @@ Session 2026-03-23T14:32Z (45m): saved 3 memories — "We use JWT with RS256" [d
 Review session history:
 
 ```bash
-memtrace list --type event
+varve list --type event
 ```
 
 ---
 
 ## Storage
 
-All data lives in `.memtrace/memtrace.db` — SQLite with WAL mode, local-only, no account required. The `.memtrace/` directory is added to `.gitignore` automatically on init.
+All data lives in `.varve/varve.db` — SQLite with WAL mode, local-only, no account required. The `.varve/` directory is added to `.gitignore` automatically on init.
 
 Memory IDs are [ULIDs](https://github.com/ulid/spec) — lexicographically sortable, collision-resistant, and time-ordered.
 
@@ -155,7 +155,7 @@ they used to distinguish now lives in tags (`session`, `prompt`).
 A decision's file paths are **globs**, matched with `doublestar`:
 
 ```bash
-memtrace save "Store code returns wrapped errors" --type convention --files 'internal/kernel/**'
+varve save "Store code returns wrapped errors" --type convention --files 'internal/kernel/**'
 ```
 
 `memory_context` and the file matcher expand them, so `internal/kernel/**`

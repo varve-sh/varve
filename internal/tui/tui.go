@@ -152,7 +152,7 @@ func newModel(k *kernel.MemoryKernel, memories []types.Memory) model {
 	delegate.ShowDescription = true
 
 	l := list.New(items, delegate, 0, 0)
-	l.Title = "memtrace"
+	l.Title = "varve"
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(true)
 	l.Styles.Title = styleTitle
@@ -333,7 +333,7 @@ func (m model) openEditor() tea.Cmd {
 	}
 
 	// Write content to a temp file.
-	tmp, err := os.CreateTemp("", "memtrace-*.txt")
+	tmp, err := os.CreateTemp("", "varve-*.txt")
 	if err != nil {
 		return func() tea.Msg { return errMsg{err} }
 	}

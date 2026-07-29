@@ -156,12 +156,16 @@ func ImportCursorRules(root string, asNotes bool) ([]Candidate, []string, error)
 //
 // Both halves are required: the heading this tool writes, and at least one of
 // the MCP tool names only this tool's instructions use. A user's genuine block
-// titled "memtrace" that talks about their own conventions is still imported.
+// titled "varve" that talks about their own conventions is still imported.
 func IsToolInstructionBlock(title, body string) bool {
 	t := strings.ToLower(strings.TrimSpace(title))
 	switch t {
-	case "memtrace", "memtrace (memory)", "varve", "varve (memory)",
-		"memtrace memory instructions", "varve memory instructions":
+	// The legacy `memtrace` headings stay listed deliberately: a user who
+	// installed before the rename still has one in their CLAUDE.md, and it is
+	// still our instruction block, not their convention. Dropping them would
+	// re-open F47 for exactly the existing users the rename is least visible to.
+	case "varve", "varve (memory)", "varve memory instructions",
+		"memtrace", "memtrace (memory)", "memtrace memory instructions":
 	default:
 		return false
 	}
