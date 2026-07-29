@@ -45,12 +45,12 @@ func newStatsCmd() *cobra.Command {
 					}
 				}
 				out := map[string]interface{}{
-					"window_days":       days,
-					"total_live":        result.TotalLive,
-					"saved_this_period": result.SavedThisWeek,
-					"recalls_this_period": result.RecallsThisWeek,
+					"window_days":          days,
+					"total_live":           result.TotalLive,
+					"saved_this_period":    result.SavedThisWeek,
+					"recalls_this_period":  result.RecallsThisWeek,
 					"sessions_this_period": result.SessionsThisWeek,
-					"top_accessed":      top,
+					"top_accessed":         top,
 				}
 				return json.NewEncoder(os.Stdout).Encode(out)
 			}

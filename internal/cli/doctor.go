@@ -10,7 +10,6 @@ import (
 	"github.com/memtrace-dev/memtrace/internal/types"
 	"github.com/memtrace-dev/memtrace/internal/util"
 	"github.com/spf13/cobra"
-
 )
 
 func newDoctorCmd() *cobra.Command {

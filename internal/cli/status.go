@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/fatih/color"
 	"github.com/memtrace-dev/memtrace/internal/types"
@@ -95,20 +96,41 @@ func newStatusCmd() *cobra.Command {
 			dim.Printf("Database:  %s (%s)\n", filepath.Join(".memtrace", "memtrace.db"), dbSize)
 			fmt.Println()
 			bold.Printf("Memories:  %d total\n", total)
-			for _, t := range []string{"decision", "convention", "fact", "event"} {
-				if n := counts[t]; n > 0 {
-					fmt.Printf("  %-12s %d\n", t+":", n)
+			// The same three classes the counts were collected for. Iterating the
+			// v1 set here printed 0 for `fact`/`event` and dropped the note count
+			// on the floor, so `total` never matched its own breakdown.
+			for _, t := range []types.MemoryType{
+				types.MemoryTypeDecision, types.MemoryTypeConvention, types.MemoryTypeNote,
+			} {
+				if n := counts[string(t)]; n > 0 {
+					fmt.Printf("  %-12s %d\n", string(t)+":", n)
 				}
 			}
 			fmt.Println()
-			staleCount := statusCounts["stale"]
-			if staleCount > 0 {
-				color.New(color.FgYellow).Printf("Status:    %d active, %d stale, %d archived\n",
-					statusCounts["active"], staleCount, statusCounts["archived"])
-				dim.Printf("           run 'memtrace list --status stale' to review\n")
+			// Every non-zero bucket, in lifecycle order. `total` sums all of them,
+			// so a status line naming only three of nine could not add up.
+			ordered := []string{"proposed", "active", "violated", "stale",
+				"superseded", "reverted", "rejected", "archived"}
+			var parts []string
+			for _, s := range ordered {
+				if n := statusCounts[s]; n > 0 {
+					parts = append(parts, fmt.Sprintf("%d %s", n, s))
+				}
+			}
+			if len(parts) == 0 {
+				parts = append(parts, "0 active")
+			}
+			line := "Status:    " + strings.Join(parts, ", ") + "\n"
+			if statusCounts["stale"] > 0 || statusCounts["proposed"] > 0 {
+				color.New(color.FgYellow).Printf("%s", line)
+				if statusCounts["stale"] > 0 {
+					dim.Printf("           run 'memtrace list --status stale' to review\n")
+				}
+				if statusCounts["proposed"] > 0 {
+					dim.Printf("           run 'memtrace decision pending' to confirm or decline proposals\n")
+				}
 			} else {
-				fmt.Printf("Status:    %d active, %d stale, %d archived\n",
-					statusCounts["active"], staleCount, statusCounts["archived"])
+				fmt.Printf("%s", line)
 			}
 
 			fmt.Println()

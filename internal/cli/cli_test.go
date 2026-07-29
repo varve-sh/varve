@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/memtrace-dev/memtrace/internal/kernel"
 	"github.com/memtrace-dev/memtrace/internal/types"
 	"github.com/memtrace-dev/memtrace/internal/util"
@@ -90,7 +91,14 @@ func runCmd(t *testing.T, args ...string) (string, error) {
 	}
 	origStdout := os.Stdout
 	os.Stdout = w
-	t.Cleanup(func() { os.Stdout = origStdout })
+	// Colored output goes through color.Output, which is bound to the real
+	// stdout at package init — without redirecting it too, every line printed
+	// through a *color.Color is invisible to these assertions, which is how a
+	// suite ends up asserting on the few uncolored lines instead of on the
+	// outcome.
+	origColor := color.Output
+	color.Output = w
+	t.Cleanup(func() { os.Stdout = origStdout; color.Output = origColor })
 
 	cmd := NewRootCmd()
 	cmd.SetArgs(args)

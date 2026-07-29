@@ -40,9 +40,9 @@ func TestListCmd_ShowsProposedDecisionsByDefault(t *testing.T) {
 	if !strings.Contains(out, "CI runs on arm64") {
 		t.Errorf("`list` lost the note:\n%s", out)
 	}
-	// The marker itself is written through the color writer, which is bound to
-	// the real stdout at init and cannot be captured here; the status it comes
-	// from is asserted on the JSON path instead.
+	if !strings.Contains(out, "[proposed]") {
+		t.Errorf("`list` does not mark the proposal as pending:\n%s", out)
+	}
 	jsonOut, err := runCmd(t, "list", "--json")
 	if err != nil {
 		t.Fatalf("list --json: %v\n%s", err, jsonOut)
@@ -198,5 +198,28 @@ func TestDecisionCmds_UnknownIDIsActionable(t *testing.T) {
 		if !strings.Contains(err.Error(), "not found") {
 			t.Errorf("decision %s error = %v, want a not-found message", sub, err)
 		}
+	}
+}
+
+// F14: the human `status` output must list the class that actually exists and
+// account for every row it counts. It iterated the v1 type set, so the note
+// count was computed and thrown away, and the status line named three of the
+// nine buckets `total` sums.
+func TestStatusCmd_HumanOutputAccountsForEveryRow(t *testing.T) {
+	proposedProject(t)
+
+	out, err := runCmd(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "note:") {
+		t.Errorf("`status` does not list the note class:\n%s", out)
+	}
+	if !strings.Contains(out, "Memories:  2 total") {
+		t.Errorf("total is wrong:\n%s", out)
+	}
+	// One proposed decision plus one active note — both must be named.
+	if !strings.Contains(out, "1 proposed") || !strings.Contains(out, "1 active") {
+		t.Errorf("the status line does not account for its own total:\n%s", out)
 	}
 }
