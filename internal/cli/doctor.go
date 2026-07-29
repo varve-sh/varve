@@ -51,7 +51,17 @@ func newDoctorCmd() *cobra.Command {
 			staleCount, _ := k.Count("", types.MemoryStatusStale)
 			archived, _ := k.Count("", types.MemoryStatusArchived)
 			totalAll := live + staleCount + archived
-			ok("Database", fmt.Sprintf("%s (%s, %d memories)", filepath.Join(".varve", "varve.db"), size, totalAll))
+			// Resolved, not a literal — same reason as status.go: a pre-rename
+			// store lives at .memtrace/memtrace.db, and naming a file we are not
+			// reading is worse than naming none.
+			rel := dbPath
+			if r, err := filepath.Rel(projectRoot, dbPath); err == nil {
+				rel = r
+			}
+			ok("Database", fmt.Sprintf("%s (%s, %d memories)", rel, size, totalAll))
+			if notice := util.StoreNotice(projectRoot); notice != "" {
+				warn("Store location", notice)
+			}
 
 			// 1b. The confirmation queue. A proposal that nobody sees is a
 			// quarantine with no exit (ADR-0001 D2, open question 3).

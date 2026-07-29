@@ -70,7 +70,20 @@ func newStatusCmd() *cobra.Command {
 
 			bold.Printf("Project:   %s\n", entry.Name)
 			dim.Printf("Root:      %s\n", projectRoot)
-			dim.Printf("Database:  %s (%s)\n", filepath.Join(".varve", "varve.db"), dbSize)
+			// The resolved path, never a literal. This line said
+			// filepath.Join(".varve", "varve.db") — correct for a fresh store and
+			// a lie for a pre-rename one, where the data is still at
+			// .memtrace/memtrace.db. It printed a path that did not exist while
+			// reading a different file, which is the one thing a "Database:" line
+			// must not do.
+			rel := dbPath
+			if r, err := filepath.Rel(projectRoot, dbPath); err == nil {
+				rel = r
+			}
+			dim.Printf("Database:  %s (%s)\n", rel, dbSize)
+			if notice := util.StoreNotice(projectRoot); notice != "" {
+				dim.Printf("           %s\n", notice)
+			}
 			fmt.Println()
 			bold.Printf("Memories:  %d total\n", total)
 			// The same three classes the counts were collected for. Iterating the

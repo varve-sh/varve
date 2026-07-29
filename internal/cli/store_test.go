@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varve-sh/varve/internal/kernel"
 	"github.com/varve-sh/varve/internal/util"
 )
 
@@ -17,7 +18,18 @@ func seedLegacyStore(t *testing.T, root string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"memtrace.db", "memtrace.db-wal", "memtrace.db-shm", "observer.log"} {
+	// A real database at the legacy path, because that is the realistic shape:
+	// `migrate --from-v1` converts in place, so a user who came from memtrace
+	// ends up with a v2 store still living at .memtrace/memtrace.db. Writing
+	// string bytes here was enough for `store move` (which only renames files)
+	// and made every command that opens the store fail with
+	// "file is not a database".
+	k := kernel.New(filepath.Join(dir, "memtrace.db"), "legacy-project")
+	if err := k.Open(); err != nil {
+		t.Fatal(err)
+	}
+	k.Close()
+	for _, name := range []string{"memtrace.db-wal", "memtrace.db-shm", "observer.log"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -142,5 +154,35 @@ func TestStoreMove_DryRunChangesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, util.StoreDir, "varve.db")); err == nil {
 		t.Error("dry run created the new store")
+	}
+}
+
+// The disclosure has to reach a surface a user runs.
+//
+// util.StoreNotice and its unit tests existed for a full commit while being
+// called from nowhere — the tests invoked the helper directly, so they passed
+// while the property they described ("nothing is silently invisible") was not
+// delivered by any command. This asserts through the CLI instead, which is the
+// only way that gap is visible.
+func TestLegacyStore_IsDisclosedByTheCommandsAUserRuns(t *testing.T) {
+	for _, cmd := range []string{"status", "doctor"} {
+		t.Run(cmd, func(t *testing.T) {
+			isolateConfig(t)
+			root := t.TempDir()
+			seedLegacyStore(t, root)
+			t.Chdir(root)
+			if _, err := runCmd(t, "init"); err != nil {
+				t.Fatalf("init: %v", err)
+			}
+
+			out, _ := runCmd(t, cmd)
+			if !strings.Contains(out, "varve store move") {
+				t.Errorf("%s does not disclose the pre-rename store or name the fix:\n%s", cmd, out)
+			}
+			// And it must not name a file it is not reading.
+			if strings.Contains(out, filepath.Join(".varve", "varve.db")) {
+				t.Errorf("%s claims to be reading .varve/varve.db while the store is legacy:\n%s", cmd, out)
+			}
+		})
 	}
 }
