@@ -238,6 +238,13 @@ func (k *MemoryKernel) Save(input types.MemorySaveInput) (*types.Memory, bool, e
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
+	// The declared subtype is discarded, not stored and not kept as a tag: the
+	// v2 schema has one note class and `fact`/`event` are input synonyms
+	// (ADR-0001 D1, confirmed in Amendment 2 A2.3). The v1 subtype was "a
+	// label, not a behaviour" and no read path ever branched on it; the
+	// accepted cost, recorded there, is that an export round-trip loses the
+	// label. D9's tag preservation is about migrated rows' existing tags
+	// (`session`, `prompt`), which are unaffected.
 	mem.Type = types.MemoryTypeNote
 
 	if err := k.store.Insert(mem); err != nil {
