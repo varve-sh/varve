@@ -74,6 +74,12 @@ release:
 
 brews:
   - name: varve
+    # Prereleases do not publish a formula. Without this, tagging v2.0.0-rc.1
+    # writes Formula/varve.rb pointing at the rc, so `brew install
+    # varve-sh/tap/varve` hands a release candidate to anyone who asks for varve.
+    # Consequence to know: the first Formula/varve.rb therefore appears on the
+    # first STABLE tag, which is what the tap cutover waits on.
+    skip_upload: auto
     repository:
       owner: varve-sh
       name: homebrew-tap
