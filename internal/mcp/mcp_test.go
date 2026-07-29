@@ -857,3 +857,65 @@ func TestMemoryPromptTool_WithFilePaths(t *testing.T) {
 		t.Errorf("unexpected file_paths: %v", all[0].FilePaths)
 	}
 }
+
+// F20. §D10: "Decisions surface with their status." The agent-facing tools
+// rendered a `proposed` decision — the agent's own unreviewed write, held in
+// quarantine by design — identically to an accepted, binding one, so a
+// proposal saved in one session came back in the next as law. That is
+// ADR-0002 §P2's laundering, on the two read paths that exist today.
+func TestMCPReadPaths_MarkProposedDecisions(t *testing.T) {
+	s, k := setupServer(t)
+
+	// An agent-saved decision: proposed, by D2.
+	if _, _, err := k.Save(types.MemorySaveInput{
+		Content:   "Handlers must not log secrets.",
+		Type:      types.MemoryTypeDecision,
+		Source:    types.MemorySourceAgent,
+		SessionID: "sess-1",
+		FilePaths: []string{"internal/api/**"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A human-saved one: active, and unremarkable.
+	if _, _, err := k.Save(types.MemorySaveInput{
+		Content:   "Handlers return wrapped errors.",
+		Type:      types.MemoryTypeConvention,
+		Source:    types.MemorySourceUser,
+		FilePaths: []string{"internal/api/**"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, probe := range []struct {
+		name string
+		args map[string]interface{}
+	}{
+		{"memory_recall", map[string]interface{}{"query": "handlers"}},
+		{"memory_context", map[string]interface{}{"file_paths": []interface{}{"internal/api/users.go"}}},
+	} {
+		out := resultText(t, callTool(t, s, probe.name, probe.args))
+		if !strings.Contains(out, "Handlers must not log secrets.") {
+			t.Fatalf("%s did not return the proposal at all:\n%s", probe.name, out)
+		}
+		if !strings.Contains(out, "PROPOSED") {
+			t.Errorf("%s renders a proposed decision as binding — the agent cannot "+
+				"tell it from an accepted one:\n%s", probe.name, out)
+		}
+		if strings.Count(out, "PROPOSED") != 1 {
+			t.Errorf("%s marked %d rows PROPOSED, want exactly the proposal:\n%s",
+				probe.name, strings.Count(out, "PROPOSED"), out)
+		}
+	}
+
+	// memory_get too — it is how the agent reads the full text before acting.
+	ds, err := k.Decisions().ListDecisions(kernel.DecisionFilter{
+		Statuses: []types.DecisionStatus{types.StatusProposed},
+	})
+	if err != nil || len(ds) != 1 {
+		t.Fatalf("expected one proposal, got %d (%v)", len(ds), err)
+	}
+	out := resultText(t, callTool(t, s, "memory_get", map[string]interface{}{"id": ds[0].ID}))
+	if !strings.Contains(out, "PROPOSED") {
+		t.Errorf("memory_get drops the status:\n%s", out)
+	}
+}

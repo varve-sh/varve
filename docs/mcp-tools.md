@@ -19,11 +19,13 @@ memory_save(
 ```
 
 **Decisions and conventions are governed.** One saved over MCP lands
-`proposed`: it is captured, but it does not bind and is never packed into
-context until a human accepts it (`memtrace decision accept <id>`). Surface
-pending proposals to the user rather than assuming the save took effect.
-Acceptance and rejection are CLI/TUI actions — there is no MCP tool for them,
-by design.
+`proposed`: it is captured, but it does not bind until a human accepts it
+(`memtrace decision accept <id>`), and it is never served as binding context.
+It can still be returned by `memory_recall` and `memory_context`, where it is
+marked `PROPOSED (not accepted by a human; does not bind)` — treat anything so
+marked as a pending proposal rather than as law. Surface pending proposals to
+the user instead of assuming the save took effect. Acceptance and rejection are
+CLI/TUI actions — there is no MCP tool for them, by design.
 
 **Parameters**
 

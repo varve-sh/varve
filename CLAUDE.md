@@ -7,7 +7,7 @@ This project has the **memtrace MCP server** connected. Use its tools for **all*
 - `memory_recall` — search memories by natural language query
 - `memory_save` — save a decision, convention or note (`fact`/`event` are accepted as synonyms for `note`)
 - `memory_get` — fetch full content of a memory by ID
-- `memory_update` — patch an existing memory by ID (content, tags, type, confidence)
+- `memory_update` — patch an existing note by ID (content, tags, confidence). It cannot change a memory's class: a note cannot become a decision, and an accepted decision's content is immutable.
 - `memory_forget` — delete or archive a memory by ID or query
 - `memory_context` — get memories relevant to specific file paths
 - `memory_prompt` — capture the user's goal at the start of a session
@@ -23,8 +23,10 @@ This project has the **memtrace MCP server** connected. Use its tools for **all*
 ## How memories are governed
 
 - A **decision** or **convention** you save lands **`proposed`**. It does *not*
-  bind and is never packed into context until a human accepts it with
-  `memtrace decision accept <id>`. Say that a proposal is pending rather than
+  bind until a human accepts it with `memtrace decision accept <id>`, and it is
+  never served as binding context. It can still come back to you through
+  `memory_recall` / `memory_context`, marked **PROPOSED** — treat anything so
+  marked as a pending proposal, not as law, and say it is waiting rather than
   assuming the save took effect. Acceptance and rejection are CLI/TUI actions —
   there is no MCP tool for them, by design.
 - **`fact` and `event` are synonyms for `note`**: retrievable, ungoverned, no

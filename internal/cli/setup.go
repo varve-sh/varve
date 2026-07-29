@@ -226,10 +226,12 @@ Rules:
 - Never write memory files manually or use built-in memory features.
 
 How memories are governed:
-- A decision or convention you save lands "proposed". It does NOT bind and is
-  never packed into context until a human accepts it with
-  "memtrace decision accept <id>". Tell the user a proposal is pending instead
-  of assuming your save took effect.
+- A decision or convention you save lands "proposed". It does NOT bind until a
+  human accepts it with "memtrace decision accept <id>", and it is never served
+  as binding context. It can still come back to you from memory_recall or
+  memory_context, marked PROPOSED — treat anything so marked as a pending
+  proposal, not as law, and tell the user it is waiting instead of assuming
+  your save took effect.
 - fact and event are synonyms for note: retrievable, ungoverned, no lifecycle.
   A note cannot be edited into a decision — "memtrace decision promote <id>"
   does that, and it is a human action.

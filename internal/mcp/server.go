@@ -57,7 +57,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 	// Tool 1: memory_save
 	s.AddTool(
 		mcp.NewTool("memory_save",
-			mcp.WithDescription("Save a memory (decision, convention or note) to the local memory store. Decisions and conventions are governed: one you save is recorded as proposed and does not bind or get packed into context until a human accepts it with `memtrace decision accept` — tell the user it is pending rather than assuming it took effect. `fact` and `event` are synonyms for `note`: retrievable, ungoverned. Use this when you learn something important about the project that should persist across sessions. topic_key behaviour differs by type: for a note, re-saving with the same key updates it in place; for a decision or convention, it creates a *new* proposed decision that supersedes the current holder once accepted, and returns a new id."),
+			mcp.WithDescription("Save a memory (decision, convention or note) to the local memory store. Decisions and conventions are governed: one you save is recorded as proposed and does not bind until a human accepts it with `memtrace decision accept`; it is never served as binding context, and when it comes back from memory_recall or memory_context it is marked PROPOSED — treat anything so marked as a pending proposal rather than as law, and tell the user it is waiting rather than assuming it took effect. `fact` and `event` are synonyms for `note`: retrievable, ungoverned. Use this when you learn something important about the project that should persist across sessions. topic_key behaviour differs by type: for a note, re-saving with the same key updates it in place; for a decision or convention, it creates a *new* proposed decision that supersedes the current holder once accepted, and returns a new id."),
 			mcp.WithString("content",
 				mcp.Required(),
 				mcp.Description("The memory content to save. Be specific and self-contained. Wrap sensitive details in <private>...</private> to prevent them from being stored."),
@@ -182,8 +182,8 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			fmt.Fprintf(&buf, "Found %d memories:\n\n", len(results))
 			for i, r := range results {
 				m := r.Memory
-				fmt.Fprintf(&buf, "[%s] %s · %s · confidence: %.1f\n%s",
-					m.ID, m.Type, formatAge(m.CreatedAt), m.Confidence, m.Summary)
+				fmt.Fprintf(&buf, "[%s] %s%s · %s · confidence: %.1f\n%s",
+					m.ID, m.Type, statusLabel(m), formatAge(m.CreatedAt), m.Confidence, m.Summary)
 				if len(m.Tags) > 0 {
 					fmt.Fprintf(&buf, "\ntags: %s", strings.Join(m.Tags, ", "))
 				}
@@ -224,8 +224,8 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			}
 
 			var buf strings.Builder
-			fmt.Fprintf(&buf, "[%s] %s · %s · confidence: %.1f\n",
-				mem.ID, mem.Type, formatAge(mem.CreatedAt), mem.Confidence)
+			fmt.Fprintf(&buf, "[%s] %s%s · %s · confidence: %.1f\n",
+				mem.ID, mem.Type, statusLabel(*mem), formatAge(mem.CreatedAt), mem.Confidence)
 			if len(mem.Tags) > 0 {
 				fmt.Fprintf(&buf, "tags: %s\n", strings.Join(mem.Tags, ", "))
 			}
@@ -395,8 +395,8 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 				if r.Score >= 1.0 {
 					label = "file match"
 				}
-				fmt.Fprintf(&buf, "[%s] %s · %s · %s · confidence: %.1f\n%s",
-					m.ID, label, m.Type, formatAge(m.CreatedAt), m.Confidence, m.Summary)
+				fmt.Fprintf(&buf, "[%s] %s · %s%s · %s · confidence: %.1f\n%s",
+					m.ID, label, m.Type, statusLabel(m), formatAge(m.CreatedAt), m.Confidence, m.Summary)
 				if len(m.Tags) > 0 {
 					fmt.Fprintf(&buf, "\ntags: %s", strings.Join(m.Tags, ", "))
 				}
@@ -411,6 +411,34 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			return mcp.NewToolResultText(buf.String()), nil
 		},
 	)
+}
+
+// statusLabel renders a decision's lifecycle state for the agent-facing tools.
+//
+// §D10: "Decisions surface with their status." Without it the two read paths
+// that exist today render a `proposed` decision — an agent's own unreviewed
+// write, quarantined by design — identically to an accepted, binding one, and
+// the agent applies it as law. That is ADR-0002 §P2's "laundering the agent's
+// own unreviewed writes back into its prompt", on `memory_recall` and
+// `memory_context` rather than on the packer.
+//
+// It also keeps the instructions honest: the templates shipped by A2.4 tell
+// the agent a proposal does not bind until a human accepts it, and ADR-0001
+// falsifier 1's 30-day clock runs on that copy. An active decision and a note
+// carry no marker — the unremarkable case stays unremarked.
+func statusLabel(m types.Memory) string {
+	switch m.Status {
+	case types.MemoryStatus(types.StatusProposed):
+		return " · PROPOSED (not accepted by a human; does not bind)"
+	case types.MemoryStatus(types.StatusViolated):
+		return " · VIOLATED (still binding)"
+	case types.MemoryStatusStale:
+		return " · stale"
+	case types.MemoryStatusActive:
+		return ""
+	default:
+		return " · " + string(m.Status)
+	}
 }
 
 func extractStringSlice(args map[string]interface{}, key string) []string {
