@@ -10,6 +10,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/memtrace-dev/memtrace/internal/kernel"
+	"github.com/memtrace-dev/memtrace/internal/pack"
 	"github.com/memtrace-dev/memtrace/internal/types"
 	"github.com/memtrace-dev/memtrace/internal/util"
 )
@@ -1042,5 +1043,98 @@ func TestMemoryForget_StillDeletesNotes(t *testing.T) {
 	}
 	if m, _ := k.Get(saved.ID); m != nil {
 		t.Error("the note is still there")
+	}
+}
+
+// ADR-0002 §P1: memory_pack is the session bootstrap. The tool test asserts on
+// the pack the agent actually receives — a tool that returns a valid empty
+// string is a passing test and a broken product.
+func TestMemoryPack_ServesBindingContextWithinBudget(t *testing.T) {
+	s, k := setupServer(t)
+
+	// A binding convention, an agent's proposal, and a note.
+	if _, err := k.Decisions().ProposeAccepted(kernel.DecisionInput{
+		ProjectID: "test-project",
+		Title:     "Handlers validate the auth header",
+		Body:      "Every handler under internal/auth checks the header before touching the session store.",
+		Scope:     []string{"internal/auth/**"},
+		Source:    types.DecisionSourceUser,
+		Evidence: []kernel.EvidenceInput{{
+			Kind: types.EvidenceKindCommit, Ref: "9f2c1ab", AddedBy: types.ActorHuman,
+		}},
+	}, kernel.AcceptOptions{Actor: types.ActorHuman}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := k.Save(types.MemorySaveInput{
+		Content: "Everything should use gRPC.", Type: types.MemoryTypeDecision,
+		Source: types.MemorySourceAgent, SessionID: "s1", FilePaths: []string{"internal/auth/**"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := resultText(t, callTool(t, s, "memory_pack", map[string]interface{}{
+		"file_paths": []interface{}{"internal/auth/session.go"},
+		"task":       "add refresh-token rotation",
+	}))
+
+	if !strings.Contains(out, "VARVE PACK v1") {
+		t.Fatalf("not a pack:\n%s", out)
+	}
+	if !strings.Contains(out, "Handlers validate the auth header") {
+		t.Errorf("the binding decision is missing from the pack:\n%s", out)
+	}
+	if strings.Contains(out, "Everything should use gRPC.") {
+		t.Errorf("a proposal was served as content:\n%s", out)
+	}
+	if !strings.Contains(out, "proposed decisions touching these files: 1") {
+		t.Errorf("the proposal must be counted in the footer:\n%s", out)
+	}
+	if got := pack.Estimate(out); got > pack.DefaultBudget {
+		t.Errorf("pack is %d est-tokens over the %d default budget", got, pack.DefaultBudget)
+	}
+
+	// The events the attribution chain needs.
+	served, _ := k.Decisions().Events(kernel.EventFilter{Kind: types.EventPackServed})
+	if len(served) != 1 {
+		t.Fatalf("pack.served events = %d, want 1", len(served))
+	}
+	items, _ := k.Decisions().Events(kernel.EventFilter{Kind: types.EventPackItem})
+	if len(items) == 0 {
+		t.Fatal("no pack.item events; ADR-0004's chain starts here")
+	}
+	if items[0].SessionID != served[0].SessionID || items[0].SessionID == "" {
+		t.Errorf("pack.item and pack.served must share the session: %q vs %q",
+			items[0].SessionID, served[0].SessionID)
+	}
+}
+
+// §P1's error codes reach the agent as tool errors, never as partial packs.
+func TestMemoryPack_ErrorsAreTypedAndRecordNothing(t *testing.T) {
+	s, k := setupServer(t)
+
+	for _, c := range []struct {
+		name string
+		args map[string]interface{}
+		want string
+	}{
+		{"no anchor", map[string]interface{}{}, "E3_NO_ANCHOR"},
+		{"bad budget", map[string]interface{}{
+			"task": "x", "budget_tokens": float64(10),
+		}, "E1_BAD_BUDGET"},
+		{"absolute path", map[string]interface{}{
+			"file_paths": []interface{}{"/etc/passwd"},
+		}, "E2_BAD_PATH"},
+	} {
+		res := callTool(t, s, "memory_pack", c.args)
+		if !res.IsError {
+			t.Errorf("%s: expected a tool error", c.name)
+			continue
+		}
+		if got := resultText(t, res); !strings.HasPrefix(got, c.want) {
+			t.Errorf("%s: error = %q, want it to start with %s", c.name, got, c.want)
+		}
+	}
+	if evs, _ := k.Decisions().Events(kernel.EventFilter{Kind: types.EventPackServed}); len(evs) != 0 {
+		t.Errorf("%d pack.served events from errored calls, want 0", len(evs))
 	}
 }

@@ -21,6 +21,7 @@ type sessionTracker struct {
 	startTime   time.Time
 	saved       []savedEntry
 	recallCount int
+	packCount   int
 }
 
 type savedEntry struct {
@@ -49,6 +50,12 @@ func (t *sessionTracker) recordRecall() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.recallCount++
+}
+
+func (t *sessionTracker) recordPack() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.packCount++
 }
 
 // summary returns a human-readable session summary, or "" if nothing was saved.

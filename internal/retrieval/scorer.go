@@ -43,19 +43,57 @@ const confDecayFloor = 0.1
 // confirmed/edited the memory, or an agent recently recalled it.
 // Confidence halves every 90 days without such a signal, down to confDecayFloor.
 func effectiveConfidence(m *types.Memory, now time.Time) float64 {
-	signal := m.UpdatedAt
-	if m.AccessedAt != nil && m.AccessedAt.After(signal) {
-		signal = *m.AccessedAt
+	return EffectiveConfidence(m.Confidence, m.UpdatedAt, m.AccessedAt, now)
+}
+
+// EffectiveConfidence is the decay in primitive form, so callers holding a
+// types.Decision or types.Note (which are not types.Memory) compute the same
+// number from the same code. ADR-0002 §P3 requires the packer to reuse this
+// verbatim: two implementations of a decay curve is two behaviours.
+func EffectiveConfidence(confidence float64, updatedAt time.Time, accessedAt *time.Time, now time.Time) float64 {
+	signal := updatedAt
+	if accessedAt != nil && accessedAt.After(signal) {
+		signal = *accessedAt
 	}
 	ageMs := float64(now.Sub(signal).Milliseconds())
 	if ageMs < 0 {
 		ageMs = 0
 	}
-	decayed := m.Confidence * math.Pow(0.5, ageMs/confDecayHalfLifeMs)
+	decayed := confidence * math.Pow(0.5, ageMs/confDecayHalfLifeMs)
 	if decayed < confDecayFloor {
 		decayed = confDecayFloor
 	}
 	return decayed
+}
+
+// Recency is the 30-day half-life decay on a creation time (ADR-0002 §P3's
+// recency_score, and recall's own recency term).
+func Recency(createdAt, now time.Time) float64 {
+	ageMs := float64(now.Sub(createdAt).Milliseconds())
+	if ageMs < 0 {
+		ageMs = 0
+	}
+	return math.Pow(0.5, ageMs/recencyHalfLifeMs)
+}
+
+// NormalizedBM25 maps a raw FTS5 rank (negative; more negative is better) onto
+// 0–1 by the largest magnitude in the same candidate pool. Pools from different
+// FTS tables have different corpus statistics, so this is only meaningful
+// within one pool — see the §P11 confound entry in the decisions log.
+func NormalizedBM25(rank, maxMagnitude float64) float64 {
+	if maxMagnitude <= 0 {
+		return 0
+	}
+	return math.Abs(rank) / maxMagnitude
+}
+
+// HybridText combines normalized BM25 with a cosine similarity exactly as the
+// recall scorer does: the mean, with the cosine clamped at 0.
+func HybridText(bm25Norm, semantic float64) float64 {
+	if semantic < 0 {
+		semantic = 0
+	}
+	return (bm25Norm + semantic) / 2.0
 }
 
 // candidate holds a memory and its raw BM25 rank for scoring.
@@ -86,14 +124,10 @@ func scoreCandidates(candidates []candidate, now time.Time, semanticScores map[s
 	results := make([]types.ScoredMemory, 0, len(candidates))
 	for _, c := range candidates {
 		// Text relevance: normalize BM25 to 0–1
-		bm25Norm := 0.0
-		if maxRankMag > 0 {
-			bm25Norm = math.Abs(c.bm25Rank) / maxRankMag
-		}
+		bm25Norm := NormalizedBM25(c.bm25Rank, maxRankMag)
 
 		// Recency: exponential decay from creation time
-		ageMs := float64(now.Sub(c.memory.CreatedAt).Milliseconds())
-		recency := math.Pow(0.5, ageMs/recencyHalfLifeMs)
+		recency := Recency(c.memory.CreatedAt, now)
 
 		// Confidence: decayed by time since last access or update
 		confidence := effectiveConfidence(&c.memory, now)
@@ -104,11 +138,10 @@ func scoreCandidates(candidates []candidate, now time.Time, semanticScores map[s
 		var score, textRelevance float64
 		if hybrid {
 			semScore := semanticScores[c.memory.ID] // 0 if not present
-			// Clamp cosine to 0–1 (can be negative for dissimilar vectors)
 			if semScore < 0 {
-				semScore = 0
+				semScore = 0 // clamp: cosine can be negative for dissimilar vectors
 			}
-			textRelevance = (bm25Norm + semScore) / 2.0
+			textRelevance = HybridText(bm25Norm, semScore)
 			score = weightBM25*bm25Norm + weightSemantic*semScore +
 				weightRecency*recency + weightConfidence*confidence + weightAccess*accessFreq
 		} else {

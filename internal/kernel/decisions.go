@@ -1438,6 +1438,88 @@ func (s *DecisionStore) Evidence(decisionID string) ([]types.Evidence, error) {
 	return out, rows.Err()
 }
 
+// EvidenceByProject returns evidence for every packable decision in the
+// project, keyed by decision id, oldest first.
+//
+// One query, not one per decision: the packer renders every candidate to price
+// it, and at ADR-0002 §P13's 5,000-decision ceiling the per-decision version
+// spent the entire latency budget inside SQLite.
+func (s *DecisionStore) EvidenceByProject(projectID string) (map[string][]types.Evidence, error) {
+	rows, err := s.db.Query(`
+		SELECT e.id, e.decision_id, e.kind, e.ref, e.note, e.added_by, e.accepting, e.created_at
+		  FROM evidence e
+		  JOIN decisions d ON d.id = e.decision_id
+		 WHERE d.project_id = ? AND d.status IN ('active','violated')
+		 ORDER BY e.created_at, e.id`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("querying evidence: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string][]types.Evidence{}
+	for rows.Next() {
+		var e types.Evidence
+		var note sql.NullString
+		var kind, addedBy, created string
+		var accepting int
+		if err := rows.Scan(&e.ID, &e.DecisionID, &kind, &e.Ref, &note, &addedBy,
+			&accepting, &created); err != nil {
+			return nil, err
+		}
+		e.Kind = types.EvidenceKind(kind)
+		e.AddedBy = types.Actor(addedBy)
+		e.Note = note.String
+		e.Accepting = accepting == 1
+		e.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		out[e.DecisionID] = append(out[e.DecisionID], e)
+	}
+	return out, rows.Err()
+}
+
+// UnresolvedViolationsByProject is UnresolvedViolations for every violated
+// decision in the project, in one aggregate.
+//
+// It is the same episode arithmetic (A2.2): episodes minus those dismissed by
+// event id, minus those whose violating commit was itself reverted. The
+// per-decision form remains for callers holding one id. If this ever shows up
+// hot, ADR-0002 open question 2 reserves a denormalized counter — a schema
+// change through the migration framework, and ADR-0001's call, not this
+// package's.
+func (s *DecisionStore) UnresolvedViolationsByProject(projectID string) (map[string]int, error) {
+	rows, err := s.db.Query(`
+		SELECT v.decision_id, COUNT(*)
+		  FROM events v
+		  JOIN decisions d ON d.id = v.decision_id
+		 WHERE v.kind = 'decision.violated'
+		   AND d.project_id = ? AND d.status = 'violated'
+		   AND NOT EXISTS (
+		        SELECT 1 FROM events x
+		         WHERE x.kind = 'decision.violation_dismissed'
+		           AND x.decision_id = v.decision_id
+		           AND json_extract(x.payload, '$.violation_event_id') = v.id)
+		   AND NOT EXISTS (
+		        SELECT 1 FROM events r
+		         WHERE r.kind = 'revert.detected'
+		           AND v.commit_sha IS NOT NULL
+		           AND json_extract(r.payload, '$.reverts_sha') = v.commit_sha)
+		 GROUP BY v.decision_id`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("counting unresolved violations: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // AcceptingCommitEvidence returns the decisions for which sha is *accepting*
 // commit evidence — the only rows the automatic revert rule may terminate (D6).
 func (s *DecisionStore) AcceptingCommitEvidence(sha string) ([]string, error) {

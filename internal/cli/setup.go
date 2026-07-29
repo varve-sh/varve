@@ -216,10 +216,11 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 // agent's rules/instructions file. All agent-specific snippets derive from this.
 const memtraceInstructionsCore = `This project has the memtrace MCP server connected. Use its tools for all memory operations — never use built-in memory tools.
 
-Memory tools: memory_recall, memory_save, memory_get, memory_update, memory_forget, memory_context, memory_prompt
+Memory tools: memory_pack, memory_recall, memory_save, memory_get, memory_update, memory_forget, memory_context, memory_prompt
 
 Rules:
-- Before every task — call memory_recall with a relevant query, no exceptions. This includes commits, quick fixes, and one-liners.
+- Before touching files — call memory_pack with the file paths you are about to read or edit, and a one-line task. It returns everything binding on those files, deduplicated, inside a token budget. This is the first call of a task, not an optional one.
+- Mid-task, to explore — call memory_recall. Pack answers "what binds these files"; recall answers "what do we know about X". Use recall when you have a question, not to bootstrap.
 - Before committing — call memory_recall to check for commit conventions.
 - Learn something new — call memory_save to persist it.
 - User says forget/delete/remove — call memory_forget.
@@ -245,7 +246,12 @@ What actually happens when you call these tools:
   anything so marked as a pending proposal, not as law.
 - memory_context never returns a proposal as content; it reports proposals as
   a trailing count with their ids. Everything else it returns is binding or
-  ungoverned.`
+  ungoverned.
+- memory_pack is budget-governed: it serves the highest-ranked binding
+  decisions in full, elides bodies to "[body elided — memory_get <id>]" when
+  the budget runs short, and names everything it left out in the footer. If
+  something you need was elided or omitted, memory_get it by id or raise
+  budget_tokens. Proposals are never in the body, only in the footer count.`
 
 // claudeMdSnippet wraps the core in a CLAUDE.md section.
 const claudeMdSnippet = "\n## memtrace (memory)\n\n" + memtraceInstructionsCore + "\n"

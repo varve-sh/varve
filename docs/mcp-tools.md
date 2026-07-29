@@ -1,6 +1,73 @@
 # MCP Tools Reference
 
-Memtrace exposes seven MCP tools. Your agent calls them directly — no configuration needed beyond `memtrace setup`.
+Memtrace exposes eight MCP tools. Your agent calls them directly — no configuration needed beyond `memtrace setup`.
+
+---
+
+## `memory_pack`
+
+**The first call of a task.** "I am about to touch these files — give me
+everything binding on them, once, deduplicated, inside a budget I can afford."
+
+```
+memory_pack(
+  file_paths:    ["internal/auth/middleware.go", "internal/auth/session.go"],
+  task:          "add refresh-token rotation",   // optional if file_paths given
+  budget_tokens: 2000,                           // optional: default 2000, min 500, max 100000
+  include_notes: true                            // optional: default true
+)
+```
+
+**Parameters**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `file_paths` | one of the two | Repo-relative paths. Absolute paths and `..` are rejected. Matched against decision scope globs and note file paths. |
+| `task` | one of the two | What you are about to do. Feeds text relevance. |
+| `budget_tokens` | no | Hard ceiling on the estimated size of the returned text. The estimate is deliberately conservative, so the true count is at or below it. |
+| `include_notes` | no | Notes are appended only from budget left over after every decision has been considered; they can never displace one. |
+
+**What comes back**
+
+```
+VARVE PACK v1
+files: internal/auth/middleware.go, internal/auth/session.go
+task: add refresh-token rotation
+budget: 2000 est-tokens (bytes/3 v1) · used: 1712 · items: 4 (3 decisions, 1 note) · omitted: 2
+
+[1] DECISION 01J9W… · active · conf 0.92 · scope: internal/auth/**
+Refresh tokens rotate on every use; reuse detection revokes the family.
+…
+evidence: commit 4f2a91c, pr #87
+
+[2] DECISION 01J8Q… · VIOLATED (2 unresolved) · conf 0.88 · scope: internal/auth/session.go
+…
+
+[3] DECISION 01J7X… · active (convention, repo-wide) · conf 0.75
+Errors are wrapped with %w and never logged at the call site.
+[body elided — 640 est. tokens; memory_get 01J7X…]
+
+-- omitted (over budget): 2 — DECISION 01J5R… (rank 5, 812 est. tokens), NOTE 01J4M… (rank 6, 96 est. tokens)
+-- proposed decisions touching these files: 2 (01J2H…, 01J1G…) — not binding until accepted; review with `memtrace decision accept <id>`
+-- raise budget_tokens or memory_get an ID above for anything elided
+```
+
+Rules worth knowing:
+
+- **Nothing is dropped silently.** Anything eligible is either in the body or
+  named in the footer with the rank it would have had and what it would cost.
+- **`VIOLATED (n unresolved)`** means the rule still binds and the codebase
+  currently contradicts it in `n` unresolved places. It is not a repeal.
+- **Proposed decisions are never in the body**, only in the footer count — a
+  proposal is not law until a human accepts it.
+- **Errors** are `E1_BAD_BUDGET`, `E2_BAD_PATH`, `E3_NO_ANCHOR`, `E4_STORE`,
+  and the code is the first token of the message. An empty pack is not an
+  error: it is a valid pack with zero items.
+
+**Pack or recall?** Pack answers "what binds these files" — call it once, at
+the start, before reading the files. Recall answers "what do we know about X" —
+call it when a question comes up. They are different questions and both exist
+on purpose.
 
 ---
 

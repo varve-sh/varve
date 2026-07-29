@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/memtrace-dev/memtrace/internal/pack"
 	"github.com/memtrace-dev/memtrace/internal/types"
 )
 
@@ -70,6 +71,55 @@ func BenchmarkRecall(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, err := k.Recall(types.MemoryRecallInput{Query: "auth session", Limit: 10}); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkPack measures ADR-0002 §P13's envelope: p95 < 150 ms without an
+// embedder on a store of ≤5,000 decisions. Falsifier 5 fires above that.
+//
+// The corpus is the falsifier's own worst case — 5,000 decisions, all live, a
+// third of them scope-matching the request — so the number is the ceiling of
+// what a repo-local store can cost, not a favourable sample.
+func BenchmarkPack(b *testing.B) {
+	b.Setenv("MEMTRACE_EMBED_PROVIDER", "disabled")
+	k := New(filepath.Join(b.TempDir(), "packbench.db"), testProject)
+	if err := k.Open(); err != nil {
+		b.Fatal(err)
+	}
+	defer k.Close()
+
+	scopes := []string{"internal/auth/**", "internal/kernel/**", "docs/**"}
+	for i := 0; i < 5000; i++ {
+		if _, err := k.Decisions().ProposeAccepted(DecisionInput{
+			ProjectID: testProject,
+			Title:     fmt.Sprintf("Decision %04d about the auth and session handling", i),
+			Body: fmt.Sprintf("Rationale %04d: %s", i,
+				"the session store must not be reachable without a validated header, "+
+					"and the reasoning is recorded here at realistic length."),
+			Scope:  []string{scopes[i%len(scopes)]},
+			Source: types.DecisionSourceUser,
+			Evidence: []EvidenceInput{{
+				Kind: types.EvidenceKindCommit, Ref: fmt.Sprintf("sha%04d", i), AddedBy: types.ActorHuman,
+			}},
+		}, AcceptOptions{Actor: types.ActorHuman}); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	req := pack.Request{
+		FilePaths: []string{"internal/auth/session.go", "internal/auth/middleware.go"},
+		Task:      "add refresh token rotation",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res, err := k.Pack(req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if res.ItemCount == 0 {
+			b.Fatal("empty pack: the benchmark is measuring nothing")
 		}
 	}
 }

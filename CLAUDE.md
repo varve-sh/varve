@@ -4,7 +4,8 @@ This project has the **memtrace MCP server** connected. Use its tools for **all*
 
 ## Memory tools
 
-- `memory_recall` — search memories by natural language query
+- `memory_pack` — everything binding on a set of files, inside a token budget. **The first call of a task.**
+- `memory_recall` — search memories by natural language query (exploration, mid-task)
 - `memory_save` — save a decision, convention or note (`fact`/`event` are accepted as synonyms for `note`)
 - `memory_get` — fetch full content of a memory by ID
 - `memory_update` — patch an existing note by ID (content, tags, confidence). It cannot change a memory's class: a note cannot become a decision, and an accepted decision's content is immutable.
@@ -14,6 +15,7 @@ This project has the **memtrace MCP server** connected. Use its tools for **all*
 
 ## Rules (always follow)
 
+- **Before touching files** — call `memory_pack` with the paths you are about to read or edit and a one-line task. It returns what binds those files, deduplicated, within a budget. Pack first; recall is for questions that come up afterwards.
 - **Before every task** — call `memory_recall` with a relevant query, no exceptions. This includes commits, quick fixes, and one-liners.
 - **Before committing** — call `memory_recall` to check for commit conventions.
 - **Learn something new** — call `memory_save` to persist it.
@@ -41,6 +43,11 @@ This project has the **memtrace MCP server** connected. Use its tools for **all*
 - **`memory_context`** never returns a proposal as content; it reports them as
   a trailing count with their ids. Everything else it returns is binding or
   ungoverned.
+- **`memory_pack`** is budget-governed. It serves the top-ranked binding
+  decisions in full, elides bodies (`[body elided — memory_get <id>]`) when the
+  budget runs short, and names everything omitted in the footer with its rank
+  and cost. Nothing is dropped silently: if it is not in the body it is in the
+  footer. Proposals appear only as the footer count.
 - **`topic_key`** behaves differently by class: re-saving a **note** under an
   existing key updates it in place; re-saving a **decision** creates a new
   proposed successor that supersedes the current holder once accepted. The two

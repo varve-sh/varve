@@ -55,6 +55,8 @@ func Serve(k *kernel.MemoryKernel) error {
 }
 
 func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *sessionTracker) {
+	registerPackTool(s, k, tracker)
+
 	// Tool 1: memory_save
 	s.AddTool(
 		mcp.NewTool("memory_save",
@@ -471,6 +473,64 @@ func statusLabel(m types.Memory) string {
 	default:
 		return " · " + string(m.Status)
 	}
+}
+
+// registerPackTool adds `memory_pack` (ADR-0002 §P1). It is the session
+// bootstrap tool: "I am about to touch these files; give me everything binding
+// on them, once, deduplicated, inside this budget." memory_recall stays exactly
+// as it was — the two coexist by Phase 0 ruling 3, and merging them would
+// destroy the only cheap comparison between them (§P11).
+func registerPackTool(s *server.MCPServer, k *kernel.MemoryKernel, tracker *sessionTracker) {
+	s.AddTool(
+		mcp.NewTool("memory_pack",
+			mcp.WithDescription("Get everything binding on the files you are about to work on, packed into a token budget. Call this ONCE at the start of a task, before reading the files — it is the session bootstrap, where memory_recall is for exploring a question mid-task. Returns binding decisions and conventions in rank order (violated ones flagged), then ungoverned notes if budget remains, then a footer naming everything left out and how to fetch it. Proposed decisions are never included as content; they are counted in the footer, because a proposal is not law until a human accepts it."),
+			mcp.WithArray("file_paths",
+				mcp.Description(`Repo-relative paths you are about to read or edit, e.g. ["internal/auth/middleware.go"]. Absolute paths and ".." are rejected. Either this or task is required.`),
+			),
+			mcp.WithString("task",
+				mcp.Description("What you are about to do, in a sentence. Used for text relevance. Either this or file_paths is required."),
+			),
+			mcp.WithNumber("budget_tokens",
+				mcp.Description("Hard ceiling on the estimated size of the returned text (default 2000, min 500, max 100000). The estimate is deliberately conservative, so the real token count is at or below this."),
+			),
+			mcp.WithBoolean("include_notes",
+				mcp.Description("Include ungoverned notes after the decisions (default true). Notes never displace a decision."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			task, _ := args["task"].(string)
+			in := kernelPackRequest(args, task)
+
+			res, err := k.Pack(in)
+			if err != nil {
+				// Errors are returned as MCP tool errors, never as partial
+				// packs, and an errored call emits no pack.served (§P1).
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			tracker.recordPack()
+			return mcp.NewToolResultText(res.Text), nil
+		},
+	)
+}
+
+func kernelPackRequest(args map[string]interface{}, task string) pack.Request {
+	in := pack.Request{
+		FilePaths: extractStringSlice(args, "file_paths"),
+		Task:      task,
+	}
+	if v, ok := args["budget_tokens"]; ok {
+		switch n := v.(type) {
+		case float64:
+			in.BudgetTokens = int(n)
+		case int:
+			in.BudgetTokens = n
+		}
+	}
+	if v, ok := args["include_notes"].(bool); ok {
+		in.ExcludeNotes = !v
+	}
+	return in
 }
 
 // forgetResult says what actually happened, in the words the agent should

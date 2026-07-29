@@ -275,6 +275,9 @@ func TestInstructionTemplates_DescribeObservableBehaviour(t *testing.T) {
 			{"fact/event are notes", "synonyms for note"},
 			// (3) an agent's forget records a request — it does not dispose
 			{"forget records a request", "disposal request"},
+			// §4b: pack-first teaching, which ships with the packer.
+			{"pack is the first call", "memory_pack"},
+			{"recall is for exploration", "memory_recall"},
 			{"forget changes nothing", "changes no status"},
 			{"who confirms a disposal, while proposed", "memtrace decision reject"},
 			{"who confirms a disposal, once binding", "memtrace decision revert"},

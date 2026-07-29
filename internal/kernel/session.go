@@ -161,6 +161,15 @@ func (k *MemoryKernel) countSessionRecall() {
 	k.session.recalls++
 }
 
+// countSessionPack feeds session.ended's `packs`. Without it the payload
+// reports 0 forever, and a report nobody can distinguish from "the packer was
+// never used" is worse than no number.
+func (k *MemoryKernel) countSessionPack() {
+	k.session.mu.Lock()
+	defer k.session.mu.Unlock()
+	k.session.packs++
+}
+
 // EndSession emits session.ended for an announced session and clears it.
 //
 // A session that was registered but never announced (a CLI invocation that

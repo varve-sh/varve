@@ -23,11 +23,12 @@ import (
 // (decisions log, 2026-07-28 ruling): one serializer, so the two tools cannot
 // drift into describing the same fact two ways.
 //
-// maxIDs caps how many ids are named; <= 0 means all of them. §P8's truncation
-// rule is that a footer line drops **ids** when its reserve is exhausted and
-// never drops the **count** — the count is the part that carries the meaning
-// ("something binding-looking exists that you are not being shown"), and an id
-// list is only an affordance for acting on it.
+// maxIDs caps how many ids are named: 0 means all of them, and a **negative**
+// value means none — the count only. §P8's truncation rule is that a footer
+// line drops **ids** when its reserve is exhausted and never drops the
+// **count** — the count is the part that carries the meaning ("something
+// binding-looking exists that you are not being shown"), and an id list is
+// only an affordance for acting on it.
 //
 // Returns "" when there is nothing to report: a footer line that says "0" is
 // noise in every pack that has no proposals, which is most of them.
@@ -37,7 +38,7 @@ func ProposedFooter(ids []string, maxIDs int) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "-- proposed decisions touching these files: %d", len(ids))
-	if maxIDs <= 0 || maxIDs > len(ids) {
+	if maxIDs == 0 || maxIDs > len(ids) {
 		maxIDs = len(ids)
 	}
 	if maxIDs > 0 {
