@@ -323,6 +323,12 @@ func TestPack_LatencyEnvelope(t *testing.T) {
 	if testing.Short() {
 		t.Skip("populates 5,000 decisions")
 	}
+	if raceEnabled {
+		// The race detector costs 10–30x, so the wall clock here measures the
+		// instrumentation rather than the packer. The envelope is a production
+		// property; the correctness tests above run under -race and matter.
+		t.Skip("latency envelope is not meaningful under the race detector")
+	}
 	k := packKernel(t)
 	scopes := []string{"internal/auth/**", "internal/kernel/**", "docs/**"}
 	for i := 0; i < 5000; i++ {
