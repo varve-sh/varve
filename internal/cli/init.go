@@ -36,7 +36,56 @@ func newInitCmd() *cobra.Command {
 
 			// Check if already initialized
 			if info, err := os.Stat(memtraceDir); err == nil && info.IsDir() {
-				fmt.Printf("varve is already initialized in %s\n", projectRoot)
+				// Directory exists — check whether this project is registered in the
+				// global config. It may not be if the DB came from another machine, the
+				// config was lost, or the config moved (the rename changed GetConfigDir;
+				// util.legacyConfigPaths handles that before we reach here). When the
+				// entry is missing, re-register rather than printing "already
+				// initialized" and doing nothing.
+				cfg := util.GetProjectConfig()
+				if _, registered := cfg.Projects[projectRoot]; registered {
+					fmt.Printf("varve is already initialized in %s\n", projectRoot)
+					return nil
+				}
+				projectName := name
+				if projectName == "" {
+					projectName = filepath.Base(projectRoot)
+				}
+				dbPath := util.GetProjectDbPath(projectRoot)
+
+				// Adopt the id the existing rows are filed under. Every read filters on
+				// project_id, so minting a fresh one would leave the store intact and
+				// every memory in it invisible — and this branch exists precisely for the
+				// case where the store has data.
+				projectID, err := kernel.ProjectIDInStore(dbPath)
+				if err != nil {
+					return fmt.Errorf("inspecting the existing store: %w", err)
+				}
+				adopted := projectID != ""
+				if !adopted {
+					projectID = util.GenerateID()
+				}
+
+				cfg.Projects[projectRoot] = util.ProjectEntry{
+					ID:        projectID,
+					Name:      projectName,
+					CreatedAt: time.Now().UTC().Format(time.RFC3339),
+				}
+				if err := util.SaveProjectConfig(cfg); err != nil {
+					return fmt.Errorf("saving config: %w", err)
+				}
+				k := kernel.New(dbPath, projectID)
+				if err := k.Open(); err != nil {
+					return fmt.Errorf("initializing database: %w", err)
+				}
+				k.Close()
+				if adopted {
+					fmt.Printf("Re-registered varve project in %s (adopted the existing store's id %s)\n",
+						projectRoot, projectID)
+				} else {
+					fmt.Printf("Re-registered varve project in %s (the store was empty)\n", projectRoot)
+				}
+				fmt.Println("\nNext: run 'varve setup' to wire the MCP server into your agent.")
 				return nil
 			}
 
