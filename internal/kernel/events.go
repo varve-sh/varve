@@ -201,7 +201,10 @@ func scanEvent(s scanner) (*types.Event, error) {
 // the payload shape stays with the catalogue it belongs to. Phase 0 ruling 3
 // keeps memory_recall's semantics unchanged while the packer ships beside it;
 // this event is what makes the two comparable (ADR-0002 P11).
-func (s *DecisionStore) RecordRecall(projectID string, in types.MemoryRecallInput, ids []string) error {
+func (s *DecisionStore) RecordRecall(
+	projectID string, in types.MemoryRecallInput, ids []string,
+	sessionID, agent, model string,
+) error {
 	if ids == nil {
 		ids = []string{}
 	}
@@ -210,7 +213,9 @@ func (s *DecisionStore) RecordRecall(projectID string, in types.MemoryRecallInpu
 			ProjectID: projectID,
 			Kind:      types.EventRecallServed,
 			Actor:     types.ActorSystem,
-			SessionID: in.SessionID,
+			SessionID: sessionID,
+			Agent:     agent,
+			Model:     model,
 			Payload: map[string]any{
 				"query": in.Query,
 				"ids":   ids,

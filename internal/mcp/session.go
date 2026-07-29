@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/memtrace-dev/memtrace/internal/types"
-	"github.com/memtrace-dev/memtrace/internal/util"
 )
 
 // sessionTracker records MCP tool activity within a single server lifetime.
@@ -30,8 +29,11 @@ type savedEntry struct {
 	memType types.MemoryType
 }
 
-func newSessionTracker() *sessionTracker {
-	return &sessionTracker{id: util.GenerateID(), startTime: time.Now().UTC()}
+// newSessionTracker takes the id the kernel minted for this connection, so the
+// prose summary, every write's provenance and the session.started/ended events
+// all name the same session (ADR-0004 §D3).
+func newSessionTracker(id string) *sessionTracker {
+	return &sessionTracker{id: id, startTime: time.Now().UTC()}
 }
 
 // sessionID returns the identifier stamped on this session's events.

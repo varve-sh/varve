@@ -29,6 +29,10 @@ type MemoryKernel struct {
 	notes     *NoteStore
 	pipeline  *retrieval.Pipeline
 	embedder  embedding.Embedder // nil when embeddings are not configured
+	// session carries the attribution session this kernel's events belong to
+	// (ADR-0004 §D3). Zero value = no session; events are then written with a
+	// NULL session_id, as an uninstrumented caller's are.
+	session session
 }
 
 // OpenDB opens a SQLite database with the per-connection PRAGMAs of ADR-0001
@@ -132,9 +136,10 @@ func (k *MemoryKernel) Open() error {
 	return nil
 }
 
-// Close closes the underlying database connection.
+// Close ends any open session and closes the underlying database connection.
 func (k *MemoryKernel) Close() error {
 	if k.db != nil {
+		k.EndSession()
 		return k.db.Close()
 	}
 	return nil
@@ -211,6 +216,7 @@ func (k *MemoryKernel) Save(input types.MemorySaveInput) (*types.Memory, bool, e
 			if err != nil {
 				return nil, false, err
 			}
+			k.countSessionSave()
 			return mem, true, nil
 		}
 	}
@@ -248,6 +254,7 @@ func (k *MemoryKernel) Save(input types.MemorySaveInput) (*types.Memory, bool, e
 		}(mem.ID, mem.Content)
 	}
 
+	k.countSessionSave()
 	return mem, false, nil
 }
 
@@ -357,7 +364,17 @@ func (k *MemoryKernel) Recall(input types.MemoryRecallInput) ([]types.ScoredMemo
 	// ruling 3, ADR-0002 P11) is available from event one. Emission never fails
 	// a recall: a read path that errors because its telemetry failed would be a
 	// worse bug than missing telemetry.
-	_ = k.decisions.RecordRecall(k.projectID, input, ids)
+	//
+	// The session stamp is what makes it joinable. A recall with a NULL
+	// session_id is neither attributable nor identifiable as CLI; §P11's join
+	// walks recall.served → session window → diff.scope_match, and both ends of
+	// that walk need the id (ADR-0004 §D3).
+	sessionID, agent, model := k.sessionStamp()
+	if input.SessionID != "" {
+		sessionID = input.SessionID
+	}
+	k.countSessionRecall()
+	_ = k.decisions.RecordRecall(k.projectID, input, ids, sessionID, agent, model)
 
 	return results, nil
 }
@@ -782,6 +799,7 @@ func (k *MemoryKernel) saveDecision(input types.MemorySaveInput) (*types.Memory,
 	if err != nil {
 		return nil, false, err
 	}
+	k.countSessionSave()
 	// A topic_key collision creates a successor, never an in-place update (D4),
 	// so this path never reports an upsert.
 	return mem, false, nil

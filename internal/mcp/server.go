@@ -24,7 +24,11 @@ func Serve(k *kernel.MemoryKernel) error {
 		server.WithToolCapabilities(true),
 	)
 
-	tracker := newSessionTracker()
+	// One MCP connection is one session, and the connection opening *is* its
+	// start (ADR-0004 §D3): session.started is written here, not lazily, so a
+	// connection that never calls a tool still has a window ADR-0002 §P11 can
+	// join against.
+	tracker := newSessionTracker(k.BeginSession(mcpAgentName, ""))
 	registerTools(s, k, tracker)
 
 	err := server.ServeStdio(s)
@@ -40,6 +44,11 @@ func Serve(k *kernel.MemoryKernel) error {
 			Agent:     mcpAgentName,
 		})
 	}
+
+	// session.ended closes the window. A crash writes no end row and none is
+	// ever repaired: §D3 synthesizes the end at query time as MAX(ts), because
+	// a repair row would be a fabricated observation.
+	k.EndSession()
 
 	return err
 }

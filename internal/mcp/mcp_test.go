@@ -11,6 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/memtrace-dev/memtrace/internal/kernel"
 	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/memtrace-dev/memtrace/internal/util"
 )
 
 // --- Helpers ---
@@ -27,7 +28,7 @@ func setupServer(t *testing.T) (*server.MCPServer, *kernel.MemoryKernel) {
 	t.Cleanup(func() { k.Close() })
 
 	s := server.NewMCPServer("memtrace", "0.0.0", server.WithToolCapabilities(true))
-	registerTools(s, k, newSessionTracker())
+	registerTools(s, k, newSessionTracker(util.GenerateID()))
 	return s, k
 }
 
@@ -508,14 +509,14 @@ func TestMemoryContextTool_MultipleFiles(t *testing.T) {
 // --- sessionTracker ---
 
 func TestSessionTracker_EmptyNoSummary(t *testing.T) {
-	tr := newSessionTracker()
+	tr := newSessionTracker(util.GenerateID())
 	if got := tr.summary(); got != "" {
 		t.Errorf("expected empty summary for no activity, got: %s", got)
 	}
 }
 
 func TestSessionTracker_RecallOnlyNoSummary(t *testing.T) {
-	tr := newSessionTracker()
+	tr := newSessionTracker(util.GenerateID())
 	tr.recordRecall()
 	tr.recordRecall()
 	if got := tr.summary(); got != "" {
@@ -524,7 +525,7 @@ func TestSessionTracker_RecallOnlyNoSummary(t *testing.T) {
 }
 
 func TestSessionTracker_OneSave(t *testing.T) {
-	tr := newSessionTracker()
+	tr := newSessionTracker(util.GenerateID())
 	tr.recordSave("id1", "We use JWT with RS256", types.MemoryTypeDecision)
 
 	got := tr.summary()
@@ -543,7 +544,7 @@ func TestSessionTracker_OneSave(t *testing.T) {
 }
 
 func TestSessionTracker_MultipleSavesAndRecalls(t *testing.T) {
-	tr := newSessionTracker()
+	tr := newSessionTracker(util.GenerateID())
 	tr.recordSave("id1", "Auth uses RS256", types.MemoryTypeDecision)
 	tr.recordSave("id2", "Error handling convention", types.MemoryTypeConvention)
 	tr.recordRecall()
@@ -568,7 +569,7 @@ func TestSessionTracker_SaveTool_RecordsInTracker(t *testing.T) {
 	defer k.Close()
 
 	s := server.NewMCPServer("memtrace", "0.0.0", server.WithToolCapabilities(true))
-	tr := newSessionTracker()
+	tr := newSessionTracker(util.GenerateID())
 	registerTools(s, k, tr)
 
 	callTool(t, s, "memory_save", map[string]interface{}{
@@ -730,7 +731,7 @@ func TestSessionTracker_RecallTool_RecordsInTracker(t *testing.T) {
 	defer k.Close()
 
 	s := server.NewMCPServer("memtrace", "0.0.0", server.WithToolCapabilities(true))
-	tr := newSessionTracker()
+	tr := newSessionTracker(util.GenerateID())
 	registerTools(s, k, tr)
 
 	callTool(t, s, "memory_recall", map[string]interface{}{"query": "anything"})

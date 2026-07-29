@@ -33,6 +33,14 @@ func openKernel() (*kernel.MemoryKernel, string, error) {
 	if err := k.Open(); err != nil {
 		return nil, "", legacyDatabaseHint(err)
 	}
+	// A synthetic per-invocation session carrying agent='cli' (ADR-0004 §D3
+	// amendment 3). It is registered, not announced: the session.started and
+	// session.ended rows are written only if this invocation emits something
+	// session-scoped, so `memtrace list` stays silent. Coverage denominators
+	// exclude agent='cli' by definition, so these rows can never inflate the
+	// kill-criterion metric — but without them a CLI recall is neither
+	// attributable nor identifiable as CLI.
+	k.SetSession(util.GenerateID(), kernel.SessionAgentCLI, "")
 	return k, projectRoot, nil
 }
 
