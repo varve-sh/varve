@@ -104,19 +104,6 @@ func (s *MemoryStore) Insert(m *types.Memory) error {
 	return NewNoteStore(s.db).insertRow(s.db, n, nil)
 }
 
-// FindByTopicKey returns the live memory holding the given topic key, or nil.
-func (s *MemoryStore) FindByTopicKey(projectID, topicKey string) (*types.Memory, error) {
-	where, args := statusFilter("", "m.")
-	q := `SELECT * FROM (` + memoryProjection + `) m
-	       WHERE m.project_id = ? AND m.topic_key = ? AND ` + where
-	row := s.db.QueryRow(q, append([]any{projectID, topicKey}, args...)...)
-	m, err := scanMemory(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return m, err
-}
-
 // FindByID retrieves a memory by its ID. Returns nil, nil if not found.
 func (s *MemoryStore) FindByID(id string) (*types.Memory, error) {
 	row := s.db.QueryRow(`SELECT * FROM (`+memoryProjection+`) m WHERE m.id = ?`, id)

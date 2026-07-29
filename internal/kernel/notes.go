@@ -111,6 +111,32 @@ func (s *NoteStore) Get(id string) (*types.Note, error) {
 	return n, err
 }
 
+// FindByTopicKey returns the *active* note holding the key, or nil.
+//
+// The lookup is deliberately confined to `notes`. §D8 gives the two tables
+// independent topic_key indexes — idx_notes_topic_key (active notes) and
+// idx_decisions_topic_key (non-terminal decisions) — so the namespaces are
+// per table, and a note save must not see a decision's key. Resolving it
+// through the projection did: the note upsert then routed into
+// MemoryStore.Update, which refuses decisions, so the note was never written
+// and the agent got an internal error string. The reverse never happened,
+// because proposeTx only ever looked at `decisions` — the asymmetry is what
+// proved it a bug rather than a policy.
+func (s *NoteStore) FindByTopicKey(projectID, topicKey string) (*types.Note, error) {
+	if topicKey == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRow(`SELECT `+noteColumns+`
+		  FROM notes
+		 WHERE project_id = ? AND topic_key = ? AND status = 'active'`,
+		projectID, topicKey)
+	n, err := scanNote(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return n, err
+}
+
 // NoteFilter narrows a list query. Zero values mean "no filter".
 type NoteFilter struct {
 	ProjectID string

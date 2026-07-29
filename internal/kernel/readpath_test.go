@@ -386,6 +386,54 @@ func TestSave_NoteTopicKeyStillUpsertsInPlace(t *testing.T) {
 	}
 }
 
+// F13: the topic_key namespaces are per table (§D8 indexes one per table), and
+// the cross-class case is the one that was broken. A note saved under a key a
+// decision holds must be written as a new note; the projection-based lookup saw
+// the decision, routed the upsert into MemoryStore.Update, and the note was
+// never written at all — the agent got an internal error string instead.
+func TestSave_TopicKeyNamespacesDoNotCrossClasses(t *testing.T) {
+	k := readPathKernel(t)
+
+	dec, _, err := k.Save(types.MemorySaveInput{
+		Content: "All handlers validate the auth header.", Type: types.MemoryTypeDecision,
+		Source: types.MemorySourceUser, TopicKey: "auth",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	note, upserted, err := k.Save(types.MemorySaveInput{
+		Content: "The auth service runs in eu-west-1.", Type: types.MemoryTypeFact,
+		Source: types.MemorySourceUser, TopicKey: "auth",
+	})
+	if err != nil {
+		t.Fatalf("a note under a key a decision holds must still be written: %v", err)
+	}
+	if upserted || note.ID == dec.ID {
+		t.Fatalf("the note must be its own row (upserted=%v)", upserted)
+	}
+	if got, err := k.Get(note.ID); err != nil || got == nil {
+		t.Fatalf("the note row is missing: %v, %v", got, err)
+	}
+	// Both rows keep the key, in their own namespace.
+	if held, _ := k.Decisions().GetDecision(dec.ID); held.TopicKey != "auth" {
+		t.Errorf("decision topic_key = %q, want auth", held.TopicKey)
+	}
+	if held, err := k.Notes().FindByTopicKey(testProject, "auth"); err != nil || held == nil || held.ID != note.ID {
+		t.Errorf("note topic_key lookup = %v, %v", held, err)
+	}
+
+	// And the reverse direction, which always worked, still does: a second note
+	// save under the same key upserts the note and leaves the decision alone.
+	again, upserted, err := k.Save(types.MemorySaveInput{
+		Content: "The auth service runs in eu-central-1.", Type: types.MemoryTypeFact,
+		Source: types.MemorySourceUser, TopicKey: "auth",
+	})
+	if err != nil || !upserted || again.ID != note.ID {
+		t.Fatalf("second note save = (%v, upserted=%v, id=%s)", err, upserted, again.ID)
+	}
+}
+
 // D3: "forget" on a decision with history is a lifecycle transition, not a
 // hard delete — the audit record survives.
 func TestDelete_MapsDecisionsOntoTheLifecycle(t *testing.T) {

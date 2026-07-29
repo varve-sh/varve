@@ -525,33 +525,38 @@ func TestStore_TouchAccessAndTopAccessed(t *testing.T) {
 	}
 }
 
-func TestStore_FindByTopicKeySpansBothTables(t *testing.T) {
+// §D8 gives `decisions` and `notes` independent topic_key indexes, so the
+// namespaces are per table: the same key may be held once in each. The lookup
+// that spanned both tables is gone — it unified the namespaces in one
+// direction only (a note save saw a decision's key; a decision save never saw
+// a note's), which broke the note save outright (F13).
+func TestStores_TopicKeyNamespacesArePerTable(t *testing.T) {
 	db := setupTestDB(t)
-	store := NewStore(db)
 
 	noteID := seedNote(t, db, "proj1", "a keyed note", func(in *NoteInput) {
-		in.TopicKey = "note-topic"
+		in.TopicKey = "auth"
 	})
 	ds := NewDecisionStore(db)
 	d, err := ds.ProposeAccepted(DecisionInput{
 		ProjectID: "proj1", Title: "a keyed decision", Source: types.DecisionSourceUser,
-		TopicKey: "decision-topic",
+		TopicKey: "auth",
 	}, AcceptOptions{Force: true})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a decision must be able to hold a key a note also holds: %v", err)
 	}
 
-	got, err := store.FindByTopicKey("proj1", "note-topic")
+	ns := NewNoteStore(db)
+	got, err := ns.FindByTopicKey("proj1", "auth")
 	if err != nil || got == nil || got.ID != noteID {
-		t.Errorf("note topic lookup = %v, %v", got, err)
+		t.Errorf("note topic lookup = %v, %v; want the note, never the decision", got, err)
 	}
-	got, err = store.FindByTopicKey("proj1", "decision-topic")
-	if err != nil || got == nil || got.ID != d.ID {
-		t.Errorf("decision topic lookup = %v, %v", got, err)
-	}
-	got, err = store.FindByTopicKey("proj1", "missing")
-	if err != nil || got != nil {
+	if got, err := ns.FindByTopicKey("proj1", "missing"); err != nil || got != nil {
 		t.Errorf("missing topic = %v, %v", got, err)
+	}
+
+	held, err := ds.ListDecisions(DecisionFilter{ProjectID: "proj1", TopicKey: "auth"})
+	if err != nil || len(held) != 1 || held[0].ID != d.ID {
+		t.Errorf("decision topic lookup = %v, %v", held, err)
 	}
 }
 

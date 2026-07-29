@@ -176,10 +176,17 @@ func (k *MemoryKernel) Save(input types.MemorySaveInput) (*types.Memory, bool, e
 		return k.saveDecision(input)
 	}
 
-	// Topic key upsert: if a key is provided and an active memory already has it,
-	// update that memory instead of creating a duplicate.
+	// Topic key upsert: if a key is provided and an active *note* already has
+	// it, update that note instead of creating a duplicate.
+	//
+	// The lookup is per table, because §D8's topic_key indexes are (F13): a note
+	// and a decision may hold the same key, and a note save that resolved a
+	// decision's key routed into MemoryStore.Update, which refuses decisions —
+	// so the note was silently never written and the caller got an internal
+	// error string. proposeTx has always looked only at `decisions`; that
+	// asymmetry is what proved this a bug rather than a policy.
 	if input.TopicKey != "" {
-		existing, err := k.store.FindByTopicKey(k.projectID, input.TopicKey)
+		existing, err := k.notes.FindByTopicKey(k.projectID, input.TopicKey)
 		if err != nil {
 			return nil, false, fmt.Errorf("topic key lookup: %w", err)
 		}
