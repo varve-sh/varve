@@ -342,3 +342,142 @@ func columnExists(db *sql.DB, table, column string) (bool, error) {
 		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n)
 	return n > 0, err
 }
+
+// Migration 4 (ADR-0001 Amendment 4) licenses exactly one post-acceptance
+// content write: purge's redaction shape. Run against a database populated at
+// version 3 — the state a shipped store is in — and asserted from both sides,
+// because a trigger that stops nothing is as wrong as one that stops the
+// tombstone.
+func TestMigration4_LicensesOnlyTheRedactionShape(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "v3.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Build the pre-migration database and populate it.
+	if _, err := db.Exec(migrationsTableSQL); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:3] {
+		if err := applyOne(db, m); err != nil {
+			t.Fatalf("migration %d: %v", m.version, err)
+		}
+	}
+	now := "2026-07-28T00:00:00Z"
+	if _, err := db.Exec(`
+		INSERT INTO decisions (id, project_id, title, body, scope, status,
+		    created_at, updated_at, decided_at, status_changed_at)
+		VALUES ('d1', 'p1', 'Tokens rotate on every use', 'sk-live-SECRET',
+		    '["internal/auth/**"]', 'active', ?, ?, ?, ?)`,
+		now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before: the freeze blocks everything, including the tombstone shape.
+	if _, err := db.Exec(
+		`UPDATE decisions SET title = '[purged]', body = '', scope = '[]' WHERE id = 'd1'`,
+	); err == nil {
+		t.Fatal("the pre-migration trigger should still block the redaction shape")
+	}
+
+	if err := ApplySchema(db); err != nil {
+		t.Fatalf("applying migration 4: %v", err)
+	}
+	if v, _ := currentVersion(db); v != LatestSchemaVersion() {
+		t.Fatalf("version = %d, want %d", v, LatestSchemaVersion())
+	}
+
+	// After: an ordinary edit is still refused — the exemption must be a
+	// keyhole, not a hole.
+	for _, probe := range []struct{ name, sql string }{
+		{"content edit", `UPDATE decisions SET body = 'rewritten' WHERE id = 'd1'`},
+		{"title edit", `UPDATE decisions SET title = 'Something else' WHERE id = 'd1'`},
+		{"scope edit", `UPDATE decisions SET scope = '["**"]' WHERE id = 'd1'`},
+		{"near miss: wrong title", `UPDATE decisions SET title = '[redacted]', body = '', scope = '[]' WHERE id = 'd1'`},
+		{"near miss: body kept", `UPDATE decisions SET title = '[purged]', scope = '[]' WHERE id = 'd1'`},
+		{"near miss: scope kept", `UPDATE decisions SET title = '[purged]', body = '' WHERE id = 'd1'`},
+		{"kind change", `UPDATE decisions SET title = '[purged]', body = '', scope = '[]', kind = 'convention' WHERE id = 'd1'`},
+	} {
+		if _, err := db.Exec(probe.sql); err == nil {
+			t.Errorf("%s was permitted; the exemption is wider than the tombstone", probe.name)
+		}
+	}
+
+	// And the tombstone itself goes through.
+	if _, err := db.Exec(
+		`UPDATE decisions SET title = '[purged]', body = '', scope = '[]' WHERE id = 'd1'`,
+	); err != nil {
+		t.Fatalf("the licensed redaction shape must be permitted: %v", err)
+	}
+	var title, body, scope string
+	if err := db.QueryRow(
+		`SELECT title, body, scope FROM decisions WHERE id = 'd1'`).Scan(&title, &body, &scope); err != nil {
+		t.Fatal(err)
+	}
+	if title != "[purged]" || body != "" || scope != "[]" {
+		t.Errorf("row = (%q, %q, %q), want the tombstone", title, body, scope)
+	}
+	// The secret must be out of the FTS index too — the redaction is worth
+	// nothing if `search sk-live` still finds it.
+	var hits int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM decisions_fts WHERE decisions_fts MATCH 'SECRET'`).Scan(&hits); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 0 {
+		t.Errorf("%d FTS hits for the redacted body; the au trigger did not reindex", hits)
+	}
+	// A proposal is still freely editable (§D3) — the trigger only guards
+	// non-proposed rows, and migration 4 must not have changed that.
+	if _, err := db.Exec(`
+		INSERT INTO decisions (id, project_id, title, status, created_at, updated_at, status_changed_at)
+		VALUES ('d2', 'p1', 'A proposal', 'proposed', ?, ?, ?)`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE decisions SET body = 'edited while proposed' WHERE id = 'd2'`); err != nil {
+		t.Errorf("editing a proposal must stay legal: %v", err)
+	}
+}
+
+// No down migrations exist by design (§D9: roll forward or restore the
+// backup), so the rollback path is the transaction's: a migration that fails
+// leaves the database exactly as it was, at its previous version.
+func TestMigration_FailureRollsBackWholeAndRecordsNothing(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "rollback.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := ApplySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := currentVersion(db)
+
+	// A migration whose second statement fails after the first succeeded.
+	bad := migration{version: before + 1, name: "deliberately_broken", up: execScript(`
+		CREATE TABLE half_applied (x TEXT);
+		INSERT INTO nonexistent_table VALUES (1);`)}
+	if err := applyOne(db, bad); err == nil {
+		t.Fatal("the broken migration must fail")
+	}
+
+	if got, _ := currentVersion(db); got != before {
+		t.Errorf("version = %d after a failed migration, want %d", got, before)
+	}
+	if ok, _ := hasTable(db, "half_applied"); ok {
+		t.Error("a failed migration left its first statement behind — it is not atomic")
+	}
+	var recorded int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, bad.version).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 0 {
+		t.Error("a failed migration was recorded as applied")
+	}
+	// And the store still works afterwards.
+	if err := ApplySchema(db); err != nil {
+		t.Errorf("the database must remain usable: %v", err)
+	}
+}

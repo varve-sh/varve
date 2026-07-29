@@ -242,3 +242,37 @@ UPDATE decisions
    AND topic_key IS NULL
    AND pending_topic_key IS NULL;
 `
+
+// schemaV4SQL is migration 4 — ADR-0001 Amendment 4. It licenses exactly one
+// post-acceptance content write: purge's redaction shape.
+//
+// A trigger drop/recreate, not a table rebuild — SQLite cannot ALTER a
+// trigger, but recreating one is cheap and touches no rows. The §D8 baseline
+// and migrations 1–3 are frozen, as always.
+//
+// Why weaken the freeze at all: the store needs an answer to a secret pasted
+// into a decision body, and for a row with events the only correct answer is
+// redaction — the events are append-only and the id is load-bearing in
+// attribution joins, so deleting the row is both barred by the FK and wrong.
+// The exemption is the narrowest shape that admits the tombstone and nothing
+// else: title exactly '[purged]', body empty, scope empty, kind unchanged.
+//
+// What the backstop loses, stated: a raw-SQL writer could now overwrite an
+// accepted decision with that exact tombstone. It could already drop the
+// trigger outright, so the guarantee this gives up is one it never had. The
+// trigger's real job — catching accidental and semantic edits from inside the
+// product — is unchanged, because no code path other than purge produces this
+// shape.
+const schemaV4SQL = `
+DROP TRIGGER decisions_content_freeze;
+CREATE TRIGGER decisions_content_freeze
+BEFORE UPDATE OF title, body, scope, kind ON decisions
+WHEN old.status <> 'proposed'
+ AND (old.title <> new.title OR old.body <> new.body
+      OR old.scope <> new.scope OR old.kind <> new.kind)
+ AND NOT (new.title = '[purged]' AND new.body = ''
+          AND new.scope = '[]' AND new.kind = old.kind)
+BEGIN
+    SELECT RAISE(ABORT, 'accepted decisions are immutable; supersede instead');
+END;
+`

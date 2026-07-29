@@ -25,11 +25,13 @@ type migration struct {
 // NOT applied to databases that already hold v1 data (those are refused on
 // open and converted by MigrateFromV1).
 //
-// Migration 2 is ADR-0001 §D8. Migration 3 is Amendment 1.
+// Migration 2 is ADR-0001 §D8. Migration 3 is Amendment 1; migration 4 is
+// Amendment 4.
 var migrations = []migration{
 	{1, "baseline_v1", execScript(baselineV1SQL)},
 	{2, "decision_lifecycle_v2", execScript(schemaV2SQL)},
 	{3, "pending_topic_key", execScript(schemaV3SQL)},
+	{4, "purge_redaction_exemption", execScript(schemaV4SQL)},
 }
 
 // LatestSchemaVersion is the version a freshly created database ends up at.
