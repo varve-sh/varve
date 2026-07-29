@@ -3,9 +3,17 @@
 </p>
 
 # varve
-[varve.sh](https://varve.sh) · Persistent, searchable memory for AI coding agents — local, fast, zero-config.
+[varve.sh](https://varve.sh) · Decision memory for AI coding agents — local-first, MCP-native, one binary.
 
-Varve gives Claude Code, Cursor, Windsurf, and any MCP-compatible agent a memory that survives every new session. Decisions, conventions, and codebase knowledge are there the next time you open a chat.
+Varve gives Claude Code, Cursor, Windsurf and any MCP-compatible agent a memory that survives every session — and a record of what happened after. Decisions carry evidence, scope, provenance and an expiry. The ones relevant to the files you're touching are packed into each session within a token budget. Commits are linked back to the decisions that were in scope when they landed, including the ones that were later reverted.
+
+A decision an agent saves arrives **proposed**: it doesn't bind, and it isn't packed as context, until a human accepts it.
+
+> **What varve does not claim.** Attribution is a traceable record, not a causal
+> one. Varve shows the chain on an individual decision — packed into this
+> session, this commit touched its scope, that commit reverted it — and does not
+> estimate what would have happened otherwise. "Conformed" means no violation
+> signal was detected, not that compliance was verified.
 
 ---
 
