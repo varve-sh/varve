@@ -250,9 +250,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			if m.selected != nil {
 				id := m.selected.ID
-				_, err := m.kernel.Delete(id, types.ActorHuman)
+				done, err := m.kernel.Delete(id, types.ActorHuman)
 				if err != nil {
 					return m, func() tea.Msg { return errMsg{err} }
+				}
+				if !done {
+					// Nothing happened — an already-terminal decision has
+					// nothing to forget. Reporting it as removed dropped the row
+					// from the list until the next reload brought it back (F29).
+					m.state = viewDetail
+					return m, nil
 				}
 				return m, func() tea.Msg { return deletedMsg{id} }
 			}
@@ -312,7 +319,7 @@ func disposalPrompt(mem *types.Memory) string {
 	case types.StatusActive, types.StatusViolated:
 		return "Revert this decision? This is terminal: re-adopting it later means a new decision. (y/n)"
 	default:
-		return "This decision is already terminal — nothing to forget. (n to go back)"
+		return "This decision is already terminal — nothing to forget. (esc to go back)"
 	}
 }
 

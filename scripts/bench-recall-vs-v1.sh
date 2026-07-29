@@ -28,7 +28,12 @@ go test ./internal/kernel/ -run XXX -bench BenchmarkRecall \
 
 echo
 echo "=== v1 baseline ($V1_REF) ==="
+# `rm -rf` drops the directory but not git's admin record, and the trap below
+# does not run if a previous run was killed — so without the prune, the next
+# run fails with "missing but already registered worktree". This script exists
+# precisely so the comparison survives being come back to later.
 rm -rf "$WORKTREE"
+git worktree prune
 git worktree add -q --detach "$WORKTREE" "$V1_REF"
 trap 'git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true' EXIT
 
