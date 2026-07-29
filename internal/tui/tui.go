@@ -250,7 +250,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			if m.selected != nil {
 				id := m.selected.ID
-				_, err := m.kernel.Delete(id)
+				_, err := m.kernel.Delete(id, types.ActorHuman)
 				if err != nil {
 					return m, func() tea.Msg { return errMsg{err} }
 				}

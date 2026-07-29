@@ -616,10 +616,23 @@ func (s *DecisionStore) ClearPendingTopicKey(id string, actor types.Actor) error
 	})
 }
 
-// Reject performs proposed→rejected: a human declining a proposal. The audit
-// record survives; nothing is deleted (D2).
-func (s *DecisionStore) Reject(id, reason string) error {
-	return s.transition(id, types.StatusRejected, types.EventDecisionRejected, types.ActorHuman,
+// Reject performs proposed→rejected. The audit record survives; nothing is
+// deleted (D2).
+//
+// The actor is a parameter and not a constant. §D3 says entering `rejected` is
+// a human-confirmed action, and that is a policy question about *what may
+// trigger this transition*; it is not a licence to record every rejection as a
+// human's. An agent-initiated disposal (memory_forget over MCP on its own
+// proposal) previously produced `decision.rejected actor=human agent=mcp` — a
+// row asserting that a human did something no human did, in an append-only log
+// whose whole value is that it is traceable. Whoever triggers it is recorded
+// as having triggered it. An empty actor defaults to human, which is the
+// CLI/TUI case.
+func (s *DecisionStore) Reject(id, reason string, actor types.Actor) error {
+	if actor == "" {
+		actor = types.ActorHuman
+	}
+	return s.transition(id, types.StatusRejected, types.EventDecisionRejected, actor,
 		func(d *types.Decision) map[string]any {
 			p := map[string]any{}
 			if reason != "" {

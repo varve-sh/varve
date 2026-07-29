@@ -111,7 +111,7 @@ func TestRecall_ExcludesTerminalDecisionsButKeepsViolatedAndProposed(t *testing.
 	ds.Accept(violated.ID, AcceptOptions{Force: true})
 	ds.MarkViolated(violated.ID, ViolationOptions{CommitSHA: "sha-bad"})
 	rejected := mk("rejected rule")
-	ds.Reject(rejected.ID, "no")
+	ds.Reject(rejected.ID, "no", types.ActorHuman)
 
 	got := recalledIDs(t, k, "kafka")
 	if _, ok := got[proposed.ID]; !ok {
@@ -493,7 +493,7 @@ func TestDelete_MapsDecisionsOntoTheLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok, err := k.Delete(active.ID)
+	ok, err := k.Delete(active.ID, types.ActorHuman)
 	if err != nil || !ok {
 		t.Fatalf("delete = (%v, %v)", ok, err)
 	}
@@ -512,7 +512,7 @@ func TestDelete_MapsDecisionsOntoTheLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.Delete(proposed.ID); err != nil {
+	if _, err := k.Delete(proposed.ID, types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
 	d, _ = k.Decisions().GetDecision(proposed.ID)
@@ -524,7 +524,7 @@ func TestDelete_MapsDecisionsOntoTheLifecycle(t *testing.T) {
 	note, _, _ := k.Save(types.MemorySaveInput{
 		Content: "disposable", Type: types.MemoryTypeFact, Source: types.MemorySourceUser,
 	})
-	if _, err := k.Delete(note.ID); err != nil {
+	if _, err := k.Delete(note.ID, types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
 	if m, _ := k.Get(note.ID); m != nil {

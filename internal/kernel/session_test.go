@@ -221,7 +221,7 @@ func TestPromoteNote_RejectionLeavesTheNoteAlone(t *testing.T) {
 	if d.Kind != types.DecisionKindConvention {
 		t.Errorf("kind = %s, want convention", d.Kind)
 	}
-	if err := k.Decisions().Reject(d.ID, "not a rule"); err != nil {
+	if err := k.Decisions().Reject(d.ID, "not a rule", types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
 	got, err := k.Notes().Get(note.ID)

@@ -108,7 +108,7 @@ func TestKernel_Delete(t *testing.T) {
 	k := setupTestKernel(t)
 	saved, _, _ := k.Save(types.MemorySaveInput{Content: "to be deleted"})
 
-	deleted, err := k.Delete(saved.ID)
+	deleted, err := k.Delete(saved.ID, types.ActorHuman)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}

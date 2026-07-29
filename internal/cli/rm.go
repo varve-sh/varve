@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 
+	"github.com/memtrace-dev/memtrace/internal/types"
+
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +26,7 @@ func newRmCmd() *cobra.Command {
 				return nil
 			}
 
-			deleted, err := k.Delete(id)
+			deleted, err := k.Delete(id, types.ActorHuman)
 			if err != nil {
 				return err
 			}

@@ -233,7 +233,7 @@ func TestStatusCmd_HumanOutputAccountsForEveryRow(t *testing.T) {
 func TestStatusCmd_BothAxesCountTheSameRows(t *testing.T) {
 	k, _ := proposedProject(t)
 	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
-	if err := k.Decisions().Reject(ds[0].ID, "duplicate"); err != nil {
+	if err := k.Decisions().Reject(ds[0].ID, "duplicate", types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
 	// Store now holds: 1 rejected decision, 1 active note.

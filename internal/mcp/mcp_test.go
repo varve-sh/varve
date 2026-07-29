@@ -919,3 +919,47 @@ func TestMCPReadPaths_MarkProposedDecisions(t *testing.T) {
 		t.Errorf("memory_get drops the status:\n%s", out)
 	}
 }
+
+// F28, attribution half. An agent calling memory_forget on the proposal it
+// saved seconds earlier produced `decision.rejected actor=human agent=mcp` —
+// a row asserting that a human did something no human did, in an append-only
+// log whose entire value is that it is traceable. Whether MCP should be able
+// to reach §D3's human-confirmed transitions at all is a separate, open
+// policy question; the attribution is not open.
+func TestMemoryForget_RecordsTheAgentAsTheActor(t *testing.T) {
+	s, k := setupServer(t)
+
+	saved := resultText(t, callTool(t, s, "memory_save", map[string]interface{}{
+		"content": "Sessions live in Redis.",
+		"type":    "decision",
+	}))
+	if !strings.Contains(saved, "Saved") && !strings.Contains(saved, "memory") {
+		t.Fatalf("unexpected save result: %s", saved)
+	}
+	ds, err := k.Decisions().ListDecisions(kernel.DecisionFilter{
+		Statuses: []types.DecisionStatus{types.StatusProposed},
+	})
+	if err != nil || len(ds) != 1 {
+		t.Fatalf("expected one proposal, got %d (%v)", len(ds), err)
+	}
+	id := ds[0].ID
+
+	callTool(t, s, "memory_forget", map[string]interface{}{"id": id})
+
+	proposed, err := k.Decisions().Events(kernel.EventFilter{
+		DecisionID: id, Kind: types.EventDecisionProposed,
+	})
+	if err != nil || len(proposed) != 1 || proposed[0].Actor != types.ActorAgent {
+		t.Fatalf("decision.proposed actor = %v (%v), want agent", proposed, err)
+	}
+	rejected, err := k.Decisions().Events(kernel.EventFilter{
+		DecisionID: id, Kind: types.EventDecisionRejected,
+	})
+	if err != nil || len(rejected) != 1 {
+		t.Fatalf("decision.rejected events = %d (%v), want 1", len(rejected), err)
+	}
+	if rejected[0].Actor != types.ActorAgent {
+		t.Errorf("decision.rejected actor = %q, want agent — the disposal was the "+
+			"agent's, and no human was involved", rejected[0].Actor)
+	}
+}

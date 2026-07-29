@@ -255,7 +255,11 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 			query, _ := args["query"].(string)
 
 			if id != "" {
-				deleted, err := k.Delete(id)
+				// An agent-initiated disposal is recorded as an agent's, not a
+				// human's (F28). Whether MCP should be able to reach the
+				// human-confirmed half of §D3's matrix at all is a separate,
+				// open policy question; the attribution is not open.
+				deleted, err := k.Delete(id, types.ActorAgent)
 				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
@@ -274,7 +278,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 					return mcp.NewToolResultText("No matching memory found."), nil
 				}
 				m := results[0].Memory
-				if _, err := k.Delete(m.ID); err != nil {
+				if _, err := k.Delete(m.ID, types.ActorAgent); err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 				return mcp.NewToolResultText(

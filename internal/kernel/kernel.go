@@ -294,7 +294,17 @@ func (k *MemoryKernel) Update(id string, input types.MemoryUpdateInput) (*types.
 // `rejected` while proposed, `reverted` once binding — so the audit record
 // survives. Only an event-free decision can actually be dropped, and the FK
 // from `events` is the backstop.
-func (k *MemoryKernel) Delete(id string) (bool, error) {
+//
+// actor is who asked, and it is recorded as such. The CLI and TUI pass
+// `human`; the MCP path passes `agent`, because an agent calling memory_forget
+// on its own proposal is an agent disposing of it, whatever policy we later
+// settle on for whether it may. Recording that as `actor=human` next to
+// `agent=mcp` put a row in an append-only log asserting a human did something
+// no human did.
+func (k *MemoryKernel) Delete(id string, actor types.Actor) (bool, error) {
+	if actor == "" {
+		actor = types.ActorHuman
+	}
 	class, err := k.store.classOf(id)
 	if err != nil || class == "" {
 		return false, err
@@ -320,10 +330,14 @@ func (k *MemoryKernel) Delete(id string) (bool, error) {
 		// proposal, which is what happened; "forgotten" was a justification the
 		// user never gave, and it is append-only once written.
 		k.governanceStamp()
-		return true, k.decisions.Reject(id, "")
+		return true, k.decisions.Reject(id, "", actor)
 	case types.StatusActive, types.StatusViolated:
 		k.governanceStamp()
-		return true, k.decisions.Revert(id, RevertOptions{Via: "human", Actor: types.ActorHuman})
+		// §D7 fixes the `via` vocabulary to "revert_detected" | "human", where
+		// "human" means "an explicit repeal rather than a detector's verdict".
+		// It stays that on an agent-initiated forget — nothing detected
+		// anything — and the `actor` column carries who asked.
+		return true, k.decisions.Revert(id, RevertOptions{Via: "human", Actor: actor})
 	default:
 		return false, nil // already terminal — nothing to do
 	}

@@ -88,10 +88,11 @@ func (k *MemoryKernel) AcceptDecision(id string, opts AcceptOptions) (*types.Dec
 	return k.decisions.Accept(id, opts)
 }
 
-// RejectDecision declines a proposal, recording the reason (D2).
+// RejectDecision declines a proposal, recording the reason (D2). It is the
+// CLI/TUI entry point, so the actor is human.
 func (k *MemoryKernel) RejectDecision(id, reason string) error {
 	k.governanceStamp()
-	return k.decisions.Reject(id, reason)
+	return k.decisions.Reject(id, reason, types.ActorHuman)
 }
 
 // AddDecisionEvidence attaches an evidence row (D4).

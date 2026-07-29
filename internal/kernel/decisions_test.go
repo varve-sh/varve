@@ -265,7 +265,7 @@ func TestAccept_LeavesAlreadyTerminalPredecessorsUntouched(t *testing.T) {
 	s := newDecisionStore(t)
 
 	dead, _ := s.Propose(baseInput())
-	if err := s.Reject(dead.ID, "not this way"); err != nil {
+	if err := s.Reject(dead.ID, "not this way", types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
 
@@ -472,7 +472,7 @@ func TestRevert_IsTerminal(t *testing.T) {
 	if _, err := s.Accept(d.ID, AcceptOptions{Force: true}); !errors.Is(err, types.ErrIllegalTransition) {
 		t.Errorf("re-accepting a reverted decision = %v, want ErrIllegalTransition", err)
 	}
-	if err := s.Reject(d.ID, ""); !errors.Is(err, types.ErrIllegalTransition) {
+	if err := s.Reject(d.ID, "", types.ActorHuman); !errors.Is(err, types.ErrIllegalTransition) {
 		t.Errorf("rejecting a reverted decision = %v, want ErrIllegalTransition", err)
 	}
 }
@@ -480,7 +480,7 @@ func TestRevert_IsTerminal(t *testing.T) {
 func TestReject_KeepsTheAuditRecord(t *testing.T) {
 	s := newDecisionStore(t)
 	d, _ := s.Propose(baseInput())
-	if err := s.Reject(d.ID, "we do the opposite"); err != nil {
+	if err := s.Reject(d.ID, "we do the opposite", types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetDecision(d.ID)

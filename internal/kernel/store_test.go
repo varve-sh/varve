@@ -300,7 +300,7 @@ func TestStore_DefaultVisibilityExcludesTerminalDecisionsOnly(t *testing.T) {
 	ds.Accept(violated.ID, AcceptOptions{Force: true})
 	ds.MarkViolated(violated.ID, ViolationOptions{CommitSHA: "sha"})
 	rejected := mk("rejected")
-	ds.Reject(rejected.ID, "no")
+	ds.Reject(rejected.ID, "no", types.ActorHuman)
 	reverted := mk("reverted")
 	ds.Accept(reverted.ID, AcceptOptions{Force: true})
 	ds.Revert(reverted.ID, RevertOptions{Via: "human"})
@@ -387,7 +387,7 @@ func TestStore_SearchFTSExcludesTerminalDecisions(t *testing.T) {
 	if res, _ := store.SearchFTS("kafka", "proj1", 10); len(res) != 1 {
 		t.Fatalf("a proposed decision should be searchable, got %d", len(res))
 	}
-	ds.Reject(d.ID, "changed our minds")
+	ds.Reject(d.ID, "changed our minds", types.ActorHuman)
 	res, err := store.SearchFTS("kafka", "proj1", 10)
 	if err != nil {
 		t.Fatal(err)
