@@ -137,9 +137,19 @@ func (k *MemoryKernel) Open() error {
 }
 
 // Close ends any open session and closes the underlying database connection.
+//
+// `PRAGMA optimize` runs first, which is SQLite's documented recommendation
+// before closing a connection: it refreshes the statistics the planner needs
+// to choose between two viable indexes. It is load-bearing for Amendment 5 —
+// without statistics the planner prefers `idx_events_kind_ts (kind=?)` over
+// the new partial `idx_events_committed` range, so the promoted column is read
+// from a column but the window probe is not served by its index and the
+// promotion pays less than it should. Cheap (a no-op when nothing changed) and
+// silent (a failure here must never fail a Close).
 func (k *MemoryKernel) Close() error {
 	if k.db != nil {
 		k.EndSession()
+		_, _ = k.db.Exec(`PRAGMA optimize`)
 		return k.db.Close()
 	}
 	return nil

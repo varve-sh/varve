@@ -729,14 +729,33 @@ func TestQueryPlans_UseIndexesNotTableScans(t *testing.T) {
 			t.Errorf("%s: %d full scans of `events` in one plan — the report runs this "+
 				"over all history:\n  %s", name, scans, strings.Join(steps, "\n  "))
 		}
+		// Amendment 5: the promoted columns must actually be reachable. Every
+		// step that touches `committed_at`, `verdict` or `backfill` has to come
+		// from a column read, not a json_extract — the whole point of migration
+		// 5 is that these three values are off the JSON path.
+		joined := strings.Join(steps, " ")
+		for _, forbidden := range []string{"committed_at", "verdict", "backfill"} {
+			if strings.Contains(joined, "json_extract") && strings.Contains(joined, forbidden) {
+				t.Errorf("%s still reaches %s through JSON:\n  %s",
+					name, forbidden, strings.Join(steps, "\n  "))
+			}
+		}
 		t.Logf("%s plan:\n  %s", name, strings.Join(steps, "\n  "))
 	}
 }
 
-// ADR-0001 falsifier 6's line is ~100 ms for hot attribution queries, and this
-// is the query a pilot runs. The guard is the falsifier's number, not a number
-// chosen to pass: a tripwire calibrated above the thing it watches for is not
-// a tripwire (F41).
+// falsifier6PrimeMillis and falsifier6PrimeEvents are ADR-0001 falsifier 6′'s
+// own numbers (Amendment 5, A5.4): ">~100 ms for coverage or full report at
+// ≤250k events on the promoted schema". They are constants here so the guard
+// reads from the stated threshold rather than from a number chosen to pass —
+// the first guard drifted to 2 s against a 100 ms line, and that drift is now
+// a named failure mode inside the falsifier text itself.
+const (
+	falsifier6PrimeMillis = 100
+	falsifier6PrimeEvents = 250_000
+)
+
+// The guard at today's volume, against falsifier 6′'s own line.
 func TestReport_LatencyAtCurrentVolume(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds a few thousand events")
@@ -772,63 +791,67 @@ func TestReport_LatencyAtCurrentVolume(t *testing.T) {
 	if len(r.Decisions) == 0 {
 		t.Fatal("the seeded history produced no per-decision rows")
 	}
-	if coverageElapsed > 100*time.Millisecond {
-		t.Errorf("the coverage query took %v over %d events — ADR-0001 falsifier 6's "+
-			"line is ~100ms, and §D7 pre-registers the fix (promote committed_at and "+
-			"verdict to indexed columns)", coverageElapsed, events)
+	if coverageElapsed > falsifier6PrimeMillis*time.Millisecond {
+		t.Errorf("the coverage query took %v over %d events — ADR-0001 falsifier 6′'s "+
+			"line is ~%dms at ≤%d events on the promoted schema",
+			coverageElapsed, events, falsifier6PrimeMillis, falsifier6PrimeEvents)
 	}
 }
 
-// The scaling curve, measured rather than asserted, because what it shows is
-// already known and is not a regression: at ADR-0001's own projected volume of
-// 10–15k events per *month*, the coverage query passes falsifier 6's ~100ms
-// line by an order of magnitude.
+// Falsifier 6′'s own fixture: the promoted schema at scale. A5.4 asks for a
+// committed benchmark against a ≥100k-event store with the threshold encoded
+// as the ADR's number, which is what this is — including when it does not
+// pass, because a guard that only runs where it succeeds measures nothing.
 //
-// The pre-registered fix (§D7: promote committed_at and verdict to real
-// indexed columns through the migration framework) is ADR-0001's to trigger,
-// not this package's to add — escalated in planning/decisions-log.md. Until it
-// lands, this test's job is to keep the numbers in front of whoever reads the
-// suite, and to fail if the curve gets materially worse than what was
-// measured and reported.
-func TestReport_ScalingCurveAtProjectedMonthlyVolume(t *testing.T) {
+// Measured 2026-07-29 (M4 Pro), promoted schema:
+//
+//	 2,000 events  coverage   20 ms   report   45 ms     (was 73 ms / 104 ms)
+//	 7,800 events  coverage  326 ms   report  656 ms     (was 1.19 s / 1.58 s)
+//	15,600 events  coverage  1.28 s   report  2.10 s     (was 4.99 s / 6.80 s)
+//
+// A 3.5–4x improvement, and 6′'s line is still passed well below its 250k
+// ceiling: the residual cost is not JSON extraction but the join fan-out
+// (pack items × matches per decision), which the promotion was never going to
+// address. Reported and escalated rather than worked around — A5.4 says a 6′
+// firing means the single-table event log needs real design work, and names
+// summary tables as an amendment rather than a recipe.
+//
+// The bound below is therefore a *regression* bound around the measured curve,
+// and the test states the falsifier's own number in its output so nobody has
+// to read this comment to learn the guard is not the threshold.
+func TestReport_ScalingCurveOnThePromotedSchema(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds ~16k events")
 	}
 	f := newFixture(t)
-	seedRealisticHistory(t, f, 1200, 800)
+	seedRealisticHistory(t, f, 2400, 1600)
 	events := countEvents(t, f)
 
+	window := Options{From: f.base.Add(-time.Hour), To: f.base.Add(365 * 24 * time.Hour)}
+
 	start := time.Now()
-	if _, err := QueryCoverage(f.db, Options{
-		From: f.base.Add(-time.Hour), To: f.base.Add(90 * 24 * time.Hour),
-	}); err != nil {
+	if _, err := QueryCoverage(f.db, window); err != nil {
 		t.Fatal(err)
 	}
 	coverageElapsed := time.Since(start)
 
 	start = time.Now()
-	if _, err := Build(f.db, Options{
-		From: f.base.Add(-time.Hour), To: f.base.Add(90 * 24 * time.Hour),
-	}); err != nil {
+	if _, err := Build(f.db, window); err != nil {
 		t.Fatal(err)
 	}
 	reportElapsed := time.Since(start)
 
-	t.Logf("at %d events (≈one month of ADR-0001's projected volume): "+
-		"coverage %v · full report %v", events, coverageElapsed, reportElapsed)
-	t.Logf("falsifier 6's line is ~100ms; the pre-registered fix is §D7's column " +
-		"promotion, escalated to ADR-0001 rather than added here")
+	t.Logf("promoted schema at %d events: coverage %v · full report %v",
+		events, coverageElapsed, reportElapsed)
+	t.Logf("falsifier 6′'s line is ~%dms at ≤%d events; this fixture is %d events "+
+		"and is over it — the residual is join fan-out, not JSON extraction, and "+
+		"A5.4 makes that a design amendment (summary tables), not a migration",
+		falsifier6PrimeMillis, falsifier6PrimeEvents, events)
 
-	// A regression bound, explicitly not a target. Measured 2026-07-29 on an
-	// M4 Pro at ~7.9k events: coverage 1.2s, full report 1.7s — both an order
-	// of magnitude over falsifier 6's line, which is the finding, not the
-	// assertion. This fails only if the curve gets materially worse than what
-	// is recorded here, which would mean something beyond the known
-	// json_extract cost regressed.
-	if reportElapsed > 6*time.Second {
+	if reportElapsed > 8*time.Second {
 		t.Errorf("the full report took %v over %d events — materially worse than the "+
-			"recorded curve (1.7s at 7.9k events), so something beyond the known "+
-			"json_extract cost has regressed", reportElapsed, events)
+			"recorded curve (2.1s at 15.6k), so something beyond the known join "+
+			"fan-out has regressed", reportElapsed, events)
 	}
 }
 
@@ -987,4 +1010,46 @@ func TestReport_ShowsDecisionsWithNoAttributedPairs(t *testing.T) {
 	if err != nil || len(events) == 0 {
 		t.Fatalf("the unattributed row does not drill down: %d events (%v)", len(events), err)
 	}
+}
+
+// Amendment 5's index has to be reachable by the window probe, or the
+// promotion bought a column and not a plan. The planner picks the commit_sha
+// equality when a scope-match row drives the join, so this asserts the index
+// serves the probe when the probe is what drives — which is the access path
+// the report's own period filter uses.
+func TestQueryPlan_CommittedAtIndexServesTheWindowProbe(t *testing.T) {
+	f := newFixture(t)
+	seedRealisticHistory(t, f, 200, 400)
+	// The planner needs statistics to prefer a partial range index over an
+	// equality index on the same table. The kernel runs `PRAGMA optimize` on
+	// Close for exactly this reason, so any store a report is run against has
+	// them; the fixture never closes, so it stands in here.
+	if _, err := f.db.Exec(`ANALYZE`); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := f.db.Query(`EXPLAIN QUERY PLAN
+		SELECT commit_sha FROM events
+		 WHERE kind = 'diff.observed' AND committed_at IS NOT NULL
+		   AND committed_at BETWEEN ? AND ?`,
+		f.base.Format(time.RFC3339), f.base.Add(time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var steps []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatal(err)
+		}
+		steps = append(steps, detail)
+	}
+	joined := strings.Join(steps, " ")
+	if !strings.Contains(joined, "idx_events_committed") {
+		t.Errorf("the window probe does not use idx_events_committed:\n  %s",
+			strings.Join(steps, "\n  "))
+	}
+	t.Logf("window probe plan: %s", joined)
 }

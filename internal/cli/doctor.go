@@ -62,6 +62,21 @@ func newDoctorCmd() *cobra.Command {
 				ok("Pending decisions", "none")
 			}
 
+			// 1c. Attribution's own health (ADR-0001 A5.3): a diff.observed row
+			// whose promoted committed_at is NULL carries a timestamp migration
+			// 5 could not parse, and is invisible to every window join. Expected
+			// population: zero.
+			if bad, err := k.UnparseableCommitTimestamps(); err == nil {
+				if bad > 0 {
+					warn("Commit timestamps", fmt.Sprintf(
+						"%d observed commits have an unreadable timestamp and are "+
+							"excluded from attribution — re-run 'memtrace scan' after "+
+							"upgrading, or report it", bad))
+				} else {
+					ok("Commit timestamps", "all observed commits are attributable")
+				}
+			}
+
 			// 2. Stale memories
 			if staleCount > 0 {
 				warn("Stale memories", fmt.Sprintf("%d — run 'memtrace list --status stale' to review, or 'memtrace scan' to refresh", staleCount))

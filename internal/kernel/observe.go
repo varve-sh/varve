@@ -95,20 +95,26 @@ func (k *MemoryKernel) ObserveCommit(c ObservedCommit) (*ObservationResult, erro
 }
 
 func (k *MemoryKernel) observeCommitTx(tx *sql.Tx, c ObservedCommit, res *ObservationResult) error {
+	// Seconds-precision RFC3339 UTC Z-form, written to both the payload (audit
+	// record, export fidelity) and the promoted column (the hot join's key).
+	// The form is normative — a local-offset value is not chronologically
+	// ordered against a Z-form one under string comparison.
+	committedAt := c.CommittedAt.UTC().Format(time.RFC3339)
 	observedPayload := map[string]any{
 		"files":        nonNilStrings(c.Files),
 		"author":       c.Author,
 		"subject":      c.Subject,
-		"committed_at": c.CommittedAt.UTC().Format(time.RFC3339),
+		"committed_at": committedAt,
 		"branch":       c.Branch,
 		"patch_id":     c.PatchID,
 	}
 	_, inserted, err := appendEventOnce(tx, EventInput{
-		ProjectID: k.projectID,
-		Kind:      types.EventDiffObserved,
-		Actor:     types.ActorSystem,
-		CommitSHA: c.SHA,
-		Payload:   observedPayload,
+		ProjectID:   k.projectID,
+		Kind:        types.EventDiffObserved,
+		Actor:       types.ActorSystem,
+		CommitSHA:   c.SHA,
+		Payload:     observedPayload,
+		CommittedAt: committedAt,
 	})
 	if err != nil {
 		return err
@@ -290,6 +296,8 @@ func (k *MemoryKernel) recordConformTx(
 		DecisionID: d.ID,
 		CommitSHA:  c.SHA,
 		Payload:    payload,
+		Verdict:    "conform",
+		Backfill:   c.Backfill,
 	})
 	return err
 }
@@ -448,4 +456,21 @@ func (k *MemoryKernel) IsObserved(sha string) (bool, error) {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// UnparseableCommitTimestamps counts `diff.observed` rows whose promoted
+// `committed_at` column is NULL — a payload timestamp migration 5's backfill
+// could not parse (ADR-0001 A5.3).
+//
+// Such a row is invisible to every window join, which it effectively already
+// was: a malformed timestamp never compared correctly against anything. The
+// count is a diagnostic rather than a repair, because the fix is not ours to
+// guess — and the expected population on any store this product has produced
+// is zero, since the observer has always written canonical RFC3339 UTC.
+func (k *MemoryKernel) UnparseableCommitTimestamps() (int, error) {
+	var n int
+	err := k.db.QueryRow(`
+		SELECT COUNT(*) FROM events
+		 WHERE kind = 'diff.observed' AND committed_at IS NULL`).Scan(&n)
+	return n, err
 }

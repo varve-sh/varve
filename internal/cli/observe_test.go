@@ -389,3 +389,44 @@ func TestInitCmd_CreatesAGitignoreWhenThereIsNone(t *testing.T) {
 		t.Errorf(".gitignore does not exclude the store:\n%s", body)
 	}
 }
+
+// A5.3's diagnostic: `doctor` counts observed commits whose promoted
+// `committed_at` is NULL — timestamps migration 5's backfill could not parse.
+// Expected population on any store this product produced: zero, because the
+// observer has always written canonical RFC3339 UTC.
+func TestDoctorCmd_CountsUnparseableCommitTimestamps(t *testing.T) {
+	k, root := gitProject(t)
+	commitFile(t, root, "internal/auth/session.go", "package auth", "add session")
+	if _, err := runCmd(t, "scan"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCmd(t, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "all observed commits are attributable") {
+		t.Errorf("doctor does not report attribution health:\n%s", out)
+	}
+	if n, err := k.UnparseableCommitTimestamps(); err != nil || n != 0 {
+		t.Errorf("unparseable timestamps = %d (%v), want 0", n, err)
+	}
+
+	// Seed one the way a pre-%cI-fix store could have, and doctor must say so.
+	if _, err := k.Decisions().DB().Exec(`
+		INSERT INTO events (id, project_id, ts, kind, actor, commit_sha, payload)
+		VALUES ('ev-bad-ts', ?, '2026-07-29T00:00:00Z', 'diff.observed', 'system',
+		        'badsha', '{"committed_at":"not a timestamp"}')`, k.ProjectID()); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := k.UnparseableCommitTimestamps(); err != nil || n != 1 {
+		t.Fatalf("unparseable timestamps = %d (%v), want 1", n, err)
+	}
+	out, err = runCmd(t, "doctor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "unreadable timestamp") {
+		t.Errorf("doctor hides an unattributable commit:\n%s", out)
+	}
+}

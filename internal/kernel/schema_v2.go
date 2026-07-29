@@ -276,3 +276,52 @@ BEGIN
     SELECT RAISE(ABORT, 'accepted decisions are immutable; supersede instead');
 END;
 `
+
+// schemaV5SQL is migration 5 — ADR-0001 Amendment 5, executing §D7's
+// pre-registered promotion after falsifier 6 fired.
+//
+// Three columns, not two: §D5.1 filters on `backfill` in the same hot join arm
+// it reads `verdict` from, so promoting two of three would leave a JSON probe
+// on the hot path and do half the job. Payload keys keep being written — they
+// are the audit record and the export fidelity — but nothing queries them
+// again.
+//
+// `committed_at` is stored as seconds-precision RFC3339 UTC Z-form. The
+// backfill *normalizes* on the way in: SQLite's date parser accepts the
+// local-offset forms a pre-`%cI`-fix row may carry and converts them, so a
+// non-canonical legacy value cannot leak into the column. A value it cannot
+// parse leaves the column NULL — the row becomes invisible to window joins,
+// which it effectively already was, and `varve doctor` counts them.
+//
+// The append-only trigger is dropped and recreated **inside this migration's
+// transaction**: a licensed one-time bypass, on the grounds that this is a
+// representation move of facts that already exist — no fact changes, and no
+// payload is rewritten. Migration 4's licensed redaction shape is the
+// precedent. Outside this transaction the triggers are untouched.
+const schemaV5SQL = `
+ALTER TABLE events ADD COLUMN committed_at TEXT;
+ALTER TABLE events ADD COLUMN verdict TEXT
+    CHECK (verdict IS NULL OR verdict IN ('conform','violate'));
+ALTER TABLE events ADD COLUMN backfill INTEGER NOT NULL DEFAULT 0
+    CHECK (backfill IN (0, 1));
+
+DROP TRIGGER events_append_only_u;
+
+UPDATE events
+   SET committed_at = strftime('%Y-%m-%dT%H:%M:%SZ',
+                               json_extract(payload, '$.committed_at'))
+ WHERE kind = 'diff.observed'
+   AND json_extract(payload, '$.committed_at') IS NOT NULL;
+
+UPDATE events
+   SET verdict  = json_extract(payload, '$.verdict'),
+       backfill = COALESCE(json_extract(payload, '$.backfill'), 0)
+ WHERE kind = 'diff.scope_match';
+
+CREATE TRIGGER events_append_only_u BEFORE UPDATE ON events
+BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+
+CREATE INDEX idx_events_committed
+    ON events(committed_at)
+    WHERE kind = 'diff.observed' AND committed_at IS NOT NULL;
+`

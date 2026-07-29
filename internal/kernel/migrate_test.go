@@ -481,3 +481,123 @@ func TestMigration_FailureRollsBackWholeAndRecordsNothing(t *testing.T) {
 		t.Errorf("the database must remain usable: %v", err)
 	}
 }
+
+// Migration 5 (ADR-0001 Amendment 5) promotes the three attribution hot-path
+// fields to columns. Run against a database populated at version 4 — the state
+// a shipped store is in — because the whole point is moving facts that already
+// exist, and a fixture without them proves nothing.
+func TestMigration5_PromotesAttributionColumnsAndNormalisesTimestamps(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "v4.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(migrationsTableSQL); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:4] {
+		if err := applyOne(db, m); err != nil {
+			t.Fatalf("migration %d: %v", m.version, err)
+		}
+	}
+	if ok, _ := columnExists(db, "events", "committed_at"); ok {
+		t.Fatal("committed_at must arrive in migration 5, not earlier")
+	}
+
+	now := "2026-07-29T00:00:00Z"
+	seed := []struct{ id, kind, commit, payload string }{
+		// Canonical: already Z-form seconds.
+		{"e1", "diff.observed", "sha1", `{"committed_at":"2026-07-28T12:00:00Z","patch_id":"p1"}`},
+		// Legacy: a local-offset value written before the %cI fix. The backfill
+		// must normalise it, not copy it.
+		{"e2", "diff.observed", "sha2", `{"committed_at":"2026-07-28T16:30:00+02:00","patch_id":"p2"}`},
+		// Unparseable: the column stays NULL and `doctor` counts it.
+		{"e3", "diff.observed", "sha3", `{"committed_at":"not a timestamp","patch_id":"p3"}`},
+		// Verdicts, one of each, plus a backfilled one.
+		{"e4", "diff.scope_match", "sha1", `{"verdict":"conform"}`},
+		{"e5", "diff.scope_match", "sha2", `{"verdict":"violate"}`},
+		{"e6", "diff.scope_match", "sha3", `{"verdict":"conform","backfill":true}`},
+		// An unrelated kind, which must be left entirely alone.
+		{"e7", "decision.accepted", "", `{"evidence_count":1}`},
+	}
+	for _, r := range seed {
+		if _, err := db.Exec(`
+			INSERT INTO events (id, project_id, ts, kind, actor, commit_sha, payload)
+			VALUES (?, 'p1', ?, ?, 'system', ?, ?)`,
+			r.id, now, r.kind, nullableString(r.commit), r.payload); err != nil {
+			t.Fatalf("seeding %s: %v", r.id, err)
+		}
+	}
+
+	if err := ApplySchema(db); err != nil {
+		t.Fatalf("applying migration 5: %v", err)
+	}
+	if v, _ := currentVersion(db); v != LatestSchemaVersion() {
+		t.Fatalf("version = %d, want %d", v, LatestSchemaVersion())
+	}
+
+	// The facts moved into the columns, normalised on the way (A5.3).
+	for _, c := range []struct {
+		id, wantCommitted, wantVerdict string
+		wantBackfill                   int
+	}{
+		{"e1", "2026-07-28T12:00:00Z", "", 0},
+		{"e2", "2026-07-28T14:30:00Z", "", 0}, // +02:00 normalised to UTC
+		{"e3", "", "", 0},                     // unparseable -> NULL
+		{"e4", "", "conform", 0},
+		{"e5", "", "violate", 0},
+		{"e6", "", "conform", 1},
+		{"e7", "", "", 0},
+	} {
+		var committed, verdict sql.NullString
+		var backfill int
+		if err := db.QueryRow(
+			`SELECT committed_at, verdict, backfill FROM events WHERE id = ?`, c.id).
+			Scan(&committed, &verdict, &backfill); err != nil {
+			t.Fatalf("%s: %v", c.id, err)
+		}
+		if committed.String != c.wantCommitted {
+			t.Errorf("%s committed_at = %q, want %q", c.id, committed.String, c.wantCommitted)
+		}
+		if verdict.String != c.wantVerdict {
+			t.Errorf("%s verdict = %q, want %q", c.id, verdict.String, c.wantVerdict)
+		}
+		if backfill != c.wantBackfill {
+			t.Errorf("%s backfill = %d, want %d", c.id, backfill, c.wantBackfill)
+		}
+	}
+
+	// Payloads are never rewritten: this is a representation move, and the
+	// payload is the audit record and the export fidelity.
+	var payload string
+	if err := db.QueryRow(`SELECT payload FROM events WHERE id = 'e2'`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload, "+02:00") {
+		t.Errorf("the payload was rewritten: %s", payload)
+	}
+
+	// The append-only trigger is back, and the licensed bypass was one-time.
+	if _, err := db.Exec(`UPDATE events SET verdict = 'violate' WHERE id = 'e4'`); err == nil {
+		t.Error("events are append-only again after the migration; this UPDATE must abort")
+	}
+
+	// The index exists and is partial as specified.
+	var idxSQL string
+	if err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_events_committed'`).
+		Scan(&idxSQL); err != nil {
+		t.Fatalf("idx_events_committed missing: %v", err)
+	}
+	if !strings.Contains(idxSQL, "WHERE") {
+		t.Errorf("the index is not partial: %s", idxSQL)
+	}
+
+	// The CHECK constraints hold on new rows.
+	if _, err := db.Exec(`
+		INSERT INTO events (id, project_id, ts, kind, actor, payload, verdict)
+		VALUES ('bad1', 'p1', ?, 'diff.scope_match', 'system', '{}', 'maybe')`, now); err == nil {
+		t.Error("verdict must be constrained to conform/violate")
+	}
+}

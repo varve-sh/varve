@@ -21,6 +21,23 @@ type EventInput struct {
 	Model      string
 	CommitSHA  string
 	Payload    map[string]any
+
+	// The promoted attribution columns (ADR-0001 Amendment 5, migration 5).
+	// They exist because §D5.1's and §D0's hot joins probed these three values
+	// out of JSON, which cannot be indexed — falsifier 6 fired at one month of
+	// projected volume. The payload keys are still written: they are the audit
+	// record and the export fidelity. Nothing queries them again.
+
+	// CommittedAt is `diff.observed`'s commit time, in **seconds-precision
+	// RFC3339 UTC Z-form**. The form is normative (A5.2): the window joins
+	// compare it as a string, and a local-offset value is not chronologically
+	// ordered against a Z-form one.
+	CommittedAt string
+	// Verdict is `diff.scope_match`'s conform/violate.
+	Verdict string
+	// Backfill marks a verdict about a commit that predates the store (§D1.3),
+	// excluded from every reported metric.
+	Backfill bool
 }
 
 func (in *EventInput) validate() error {
@@ -42,8 +59,9 @@ func (in *EventInput) validate() error {
 
 const insertEventSQL = `
 INSERT INTO events
-    (id, project_id, ts, kind, actor, decision_id, session_id, agent, model, commit_sha, payload)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    (id, project_id, ts, kind, actor, decision_id, session_id, agent, model, commit_sha,
+     payload, committed_at, verdict, backfill)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // appendEvent writes one event inside the caller's transaction. Event writes
 // are never done on their own connection: D7 requires the event and the state
@@ -106,13 +124,17 @@ func eventArgs(in EventInput) (string, []any, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("marshalling %s payload: %w", in.Kind, err)
 	}
+	backfill := 0
+	if in.Backfill {
+		backfill = 1
+	}
 	id := util.GenerateID()
 	return id, []any{
 		id, in.ProjectID, time.Now().UTC().Format(time.RFC3339Nano),
 		string(in.Kind), string(in.Actor),
 		nullableString(in.DecisionID), nullableString(in.SessionID),
 		nullableString(in.Agent), nullableString(in.Model), nullableString(in.CommitSHA),
-		string(blob),
+		string(blob), nullableString(in.CommittedAt), nullableString(in.Verdict), backfill,
 	}, nil
 }
 

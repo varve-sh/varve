@@ -47,6 +47,18 @@ func windowEndExpr(column string, graceMinutes int) string {
 		strconv.Itoa(graceMinutes) + ` minutes')`
 }
 
+// The hot joins read `committed_at`, `verdict` and `backfill` from **columns**
+// (ADR-0001 Amendment 5, migration 5), not from JSON. §D7 pre-registered the
+// promotion and falsifier 6 fired: at ADR-0001's own projected volume of
+// 10–15k events/month the JSON probes took 1.19s for the coverage query, an
+// order of magnitude past the ~100ms line. `patch_id` and `reverts_sha` stay in
+// JSON deliberately — they are projections on rows the joins have already
+// matched, not join keys.
+//
+// Under ADR-0004 A1.2 this is an implementation update to §D0/§D5.1's
+// reference SQL: same answers, faster plan, proven by the fixture tests and by
+// a plan assertion that `idx_events_committed` serves the window probe.
+
 // Options bounds a report.
 type Options struct {
 	From         time.Time
@@ -113,28 +125,34 @@ packed AS (
     SELECT DISTINCT p.session_id
     FROM events p
     JOIN sessions s ON s.session_id = p.session_id
-    JOIN events d ON d.kind = 'diff.observed'
-                 AND json_extract(d.payload, '$.committed_at')
-                       BETWEEN s.w_start AND ` + windowEndExpr("s.w_end", graceMinutes) + `
     JOIN events m ON m.kind = 'diff.scope_match'
-                 AND m.commit_sha  = d.commit_sha
                  AND m.decision_id = p.decision_id
-                 AND json_extract(m.payload, '$.backfill') IS NULL
+                 AND m.backfill = 0
+    JOIN events d ON d.kind = 'diff.observed'
+                 AND d.commit_sha = m.commit_sha
+                 AND d.committed_at IS NOT NULL
+                 AND d.committed_at
+                       BETWEEN s.w_start AND ` + windowEndExpr("s.w_end", graceMinutes) + `
     WHERE p.kind = 'pack.item'
       AND p.decision_id IS NOT NULL
 ),
 recalled AS (
+    -- §D5.4's comparison path. The join order is forced: without it SQLite
+    -- drives the scope-match table from the kind index, walking every match
+    -- row once per recalled id, which was the quadratic term dominating this
+    -- query. CROSS JOIN constrains order only, never the result.
     SELECT DISTINCT r.session_id
     FROM events r
     JOIN sessions s ON s.session_id = r.session_id
-    JOIN json_each(r.payload, '$.ids') ids
-    JOIN events d ON d.kind = 'diff.observed'
-                 AND json_extract(d.payload, '$.committed_at')
-                       BETWEEN s.w_start AND ` + windowEndExpr("s.w_end", graceMinutes) + `
-    JOIN events m ON m.kind = 'diff.scope_match'
-                 AND m.commit_sha  = d.commit_sha
-                 AND m.decision_id = ids.value
-                 AND json_extract(m.payload, '$.backfill') IS NULL
+    CROSS JOIN json_each(r.payload, '$.ids') ids
+    CROSS JOIN events m ON m.kind = 'diff.scope_match'
+                       AND m.decision_id = ids.value
+                       AND m.backfill = 0
+    CROSS JOIN events d ON d.kind = 'diff.observed'
+                       AND d.commit_sha = m.commit_sha
+                       AND d.committed_at IS NOT NULL
+                       AND d.committed_at
+                             BETWEEN s.w_start AND ` + windowEndExpr("s.w_end", graceMinutes) + `
     WHERE r.kind = 'recall.served'
 )
 SELECT (SELECT COUNT(*) FROM sessions),
@@ -190,22 +208,23 @@ attributed_pairs AS (
     SELECT DISTINCT p.decision_id                        AS decision_id,
            d.commit_sha                                  AS commit_sha,
            p.session_id                                  AS session_id,
-           json_extract(m.payload, '$.verdict')          AS verdict,
+           m.verdict                                     AS verdict,
            COALESCE(NULLIF(json_extract(d.payload, '$.patch_id'), ''),
                     d.commit_sha)                        AS patch_id
     FROM events p
     JOIN windows w ON w.session_id = p.session_id
     JOIN events d  ON d.kind = 'diff.observed'
-                  AND json_extract(d.payload, '$.committed_at')
+                  AND d.committed_at IS NOT NULL
+                  AND d.committed_at
                         BETWEEN w.w_start AND ` + windowEndExpr("w.w_end", graceMinutes) + `
     JOIN events m  ON m.kind = 'diff.scope_match'
                   AND m.commit_sha  = d.commit_sha
                   AND m.decision_id = p.decision_id
-                  AND json_extract(m.payload, '$.backfill') IS NULL
+                  AND m.backfill = 0
     WHERE p.kind = 'pack.item'
       AND p.decision_id IS NOT NULL
-      AND json_extract(d.payload, '$.committed_at') >= :from
-      AND json_extract(d.payload, '$.committed_at') <  :to
+      AND d.committed_at >= :from
+      AND d.committed_at <  :to
 )`
 }
 
@@ -240,9 +259,9 @@ population AS (
       FROM events sm
       JOIN events od ON od.kind = 'diff.observed' AND od.commit_sha = sm.commit_sha
      WHERE sm.kind = 'diff.scope_match' AND sm.decision_id IS NOT NULL
-       AND json_extract(sm.payload, '$.backfill') IS NULL
-       AND json_extract(od.payload, '$.committed_at') >= :from
-       AND json_extract(od.payload, '$.committed_at') <  :to
+       AND sm.backfill = 0
+       AND od.committed_at >= :from
+       AND od.committed_at <  :to
 )
 SELECT pop.decision_id,
        COALESCE(dec.title, '(purged or missing)'),
@@ -255,9 +274,9 @@ SELECT pop.decision_id,
           FROM events sm
           JOIN events od ON od.kind = 'diff.observed' AND od.commit_sha = sm.commit_sha
          WHERE sm.kind = 'diff.scope_match' AND sm.decision_id = pop.decision_id
-           AND json_extract(sm.payload, '$.backfill') IS NULL
-           AND json_extract(od.payload, '$.committed_at') >= :from
-           AND json_extract(od.payload, '$.committed_at') <  :to),
+           AND sm.backfill = 0
+           AND od.committed_at >= :from
+           AND od.committed_at <  :to),
        COUNT(DISTINCT ap.patch_id),
        COUNT(DISTINCT CASE WHEN ap.verdict = 'conform' THEN ap.patch_id END),
        COUNT(DISTINCT CASE WHEN ap.verdict = 'violate' THEN ap.patch_id END),
@@ -344,8 +363,8 @@ func ObservedInPeriod(db *sql.DB, opts Options) (map[string]bool, error) {
 	rows, err := db.Query(`
 		SELECT commit_sha FROM events
 		 WHERE kind = 'diff.observed'
-		   AND json_extract(payload, '$.committed_at') >= :from
-		   AND json_extract(payload, '$.committed_at') <  :to`,
+		   AND committed_at >= :from
+		   AND committed_at <  :to`,
 		sql.Named("from", opts.fromStr()), sql.Named("to", opts.toStr()))
 	if err != nil {
 		return nil, fmt.Errorf("observed-commits query: %w", err)

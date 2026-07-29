@@ -823,6 +823,8 @@ func (s *DecisionStore) markViolatedTx(tx *sql.Tx, d *types.Decision, opts Viola
 		DecisionID: d.ID,
 		CommitSHA:  opts.CommitSHA,
 		Payload:    matchPayload,
+		Verdict:    "violate",
+		Backfill:   opts.Backfill,
 	})
 	if err != nil {
 		return false, err
