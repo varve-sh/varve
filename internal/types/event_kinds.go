@@ -12,10 +12,18 @@ type EventKind string
 
 // Lifecycle events. decision_id is set on all of these.
 const (
-	EventDecisionProposed           EventKind = "decision.proposed"
-	EventDecisionAccepted           EventKind = "decision.accepted"
-	EventDecisionRejected           EventKind = "decision.rejected"
-	EventDecisionUpdated            EventKind = "decision.updated"
+	EventDecisionProposed EventKind = "decision.proposed"
+	EventDecisionAccepted EventKind = "decision.accepted"
+	EventDecisionRejected EventKind = "decision.rejected"
+	EventDecisionUpdated  EventKind = "decision.updated"
+	// EventDecisionRevised is a normative edit while `proposed` — title, body,
+	// scope, kind, supersedes or pending_topic_key (ADR-0001 Amendment 2,
+	// A2.1). It exists as its own kind, rather than as a field list inside
+	// decision.updated, because `kind` is the promoted indexed discriminator
+	// the catalogue is built on: a consumer filtering on decision.updated must
+	// be able to trust that no normative change happened, and scope is what the
+	// whole attribution chain joins on.
+	EventDecisionRevised            EventKind = "decision.revised"
 	EventDecisionSuperseded         EventKind = "decision.superseded"
 	EventDecisionViolated           EventKind = "decision.violated"
 	EventDecisionViolationDismissed EventKind = "decision.violation_dismissed"
@@ -47,6 +55,7 @@ var knownEventKinds = map[EventKind]bool{
 	EventDecisionAccepted:           true,
 	EventDecisionRejected:           true,
 	EventDecisionUpdated:            true,
+	EventDecisionRevised:            true,
 	EventDecisionSuperseded:         true,
 	EventDecisionViolated:           true,
 	EventDecisionViolationDismissed: true,
@@ -65,6 +74,23 @@ var knownEventKinds = map[EventKind]bool{
 	EventRevertDetected:             true,
 	EventMigrationDone:              true,
 }
+
+// NormativeDecisionFields is A2.1's normative-field set: an edit touching any
+// of these while `proposed` emits decision.revised, never decision.updated.
+// It lives here, once, because a distributed copy of this set is a contract
+// that rots — it has already drifted once (Amendment 1 added
+// pending_topic_key).
+var NormativeDecisionFields = map[string]bool{
+	"title":             true,
+	"body":              true,
+	"scope":             true,
+	"kind":              true,
+	"supersedes":        true,
+	"pending_topic_key": true,
+}
+
+// IsNormativeDecisionField reports whether a field name is normative (A2.1).
+func IsNormativeDecisionField(field string) bool { return NormativeDecisionFields[field] }
 
 // IsKnownEventKind reports whether k is in the ADR-0001 §D7 catalogue.
 func IsKnownEventKind(k EventKind) bool { return knownEventKinds[k] }

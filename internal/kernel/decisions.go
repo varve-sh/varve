@@ -536,9 +536,11 @@ func (s *DecisionStore) ClearPendingTopicKey(id string, actor types.Actor) error
 			fmtTime(time.Now().UTC()), d.ID); err != nil {
 			return err
 		}
+		// pending_topic_key is in A2.1's normative set, so clearing it is a
+		// revision, not an advisory patch.
 		_, err = appendEvent(tx, EventInput{
 			ProjectID:  d.ProjectID,
-			Kind:       types.EventDecisionUpdated,
+			Kind:       types.EventDecisionRevised,
 			Actor:      actor,
 			DecisionID: d.ID,
 			Payload:    map[string]any{"fields": []string{"pending_topic_key"}},
@@ -717,7 +719,8 @@ type MetadataUpdate struct {
 }
 
 // UpdateMetadata applies an advisory patch and emits decision.updated with the
-// field list.
+// field list. Post-Amendment 2 that kind is truthfully advisory-only: nothing
+// in A2.1's normative set is reachable from here.
 func (s *DecisionStore) UpdateMetadata(id string, up MetadataUpdate, actor types.Actor) error {
 	if actor == "" {
 		actor = types.ActorHuman
@@ -770,7 +773,9 @@ func (s *DecisionStore) UpdateMetadata(id string, up MetadataUpdate, actor types
 }
 
 // EditProposed rewrites normative content while the decision is still
-// proposed, where everything is editable in place (D3).
+// proposed, where everything is editable in place (D3). It emits
+// decision.revised with the fields that actually changed (Amendment 2, A2.1);
+// decision.updated stays advisory-only and is UpdateMetadata's.
 func (s *DecisionStore) EditProposed(id string, in DecisionInput, actor types.Actor) error {
 	if actor == "" {
 		actor = types.ActorHuman
@@ -823,16 +828,17 @@ func (s *DecisionStore) EditProposed(id string, in DecisionInput, actor types.Ac
 		); err != nil {
 			return fmt.Errorf("editing proposal: %w", err)
 		}
-		// §D7 annotates decision.updated as "advisory metadata only (D3)", but
-		// §D3 also permits normative edits while proposed and the catalogue has
-		// no other event for them. Emitting nothing would leave a normative
-		// change with no audit trace, which is worse, so this kind carries both
-		// and the `fields` list is the discriminator. ADR-0004 must not read
-		// decision.updated as "no normative change happened"; flagged for the
-		// architect as a catalogue gap.
+		// decision.revised, not decision.updated: every field this method can
+		// touch is normative (ADR-0001 Amendment 2, A2.1). The split is what
+		// lets a consumer filtering on decision.updated trust that no normative
+		// change happened — scope is what the whole attribution chain joins on,
+		// so a scope change read as advisory noise would silently mis-read the
+		// audit trail. Pre-amendment decision.updated rows carrying normative
+		// field names are grandfathered: events are append-only and are not
+		// rewritten.
 		_, err = appendEvent(tx, EventInput{
 			ProjectID:  d.ProjectID,
-			Kind:       types.EventDecisionUpdated,
+			Kind:       types.EventDecisionRevised,
 			Actor:      actor,
 			DecisionID: d.ID,
 			Payload:    map[string]any{"fields": fields},

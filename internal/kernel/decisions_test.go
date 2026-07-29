@@ -1029,8 +1029,11 @@ func TestAddEvidence_DoesNotPolluteTheCommitIndex(t *testing.T) {
 	}
 }
 
-// decision.updated reports the fields that actually changed, not a fixed list.
-func TestEditProposed_ReportsOnlyChangedFields(t *testing.T) {
+// A normative edit while proposed emits decision.revised (Amendment 2, A2.1)
+// with the fields that actually changed, not a fixed list — and never
+// decision.updated, which consumers must be able to read as "no normative
+// change happened".
+func TestEditProposed_EmitsRevisedWithOnlyChangedFields(t *testing.T) {
 	s := newDecisionStore(t)
 	in := baseInput()
 	d, _ := s.Propose(in)
@@ -1039,10 +1042,15 @@ func TestEditProposed_ReportsOnlyChangedFields(t *testing.T) {
 	if err := s.EditProposed(d.ID, edit, types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
-	ev := mustEvent(t, s, d.ID, types.EventDecisionUpdated)
+	ev := mustEvent(t, s, d.ID, types.EventDecisionRevised)
 	fields, _ := ev.Payload["fields"].([]any)
 	if len(fields) != 1 || fields[0] != "body" {
 		t.Errorf("fields = %v, want [body]", ev.Payload["fields"])
+	}
+	if updates, _ := s.Events(EventFilter{
+		DecisionID: d.ID, Kind: types.EventDecisionUpdated,
+	}); len(updates) != 0 {
+		t.Errorf("%d decision.updated events for a normative edit, want 0", len(updates))
 	}
 
 	// A no-op edit emits nothing at all.
@@ -1050,9 +1058,41 @@ func TestEditProposed_ReportsOnlyChangedFields(t *testing.T) {
 	if err := s.EditProposed(d.ID, same, types.ActorHuman); err != nil {
 		t.Fatal(err)
 	}
+	revisions, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDecisionRevised})
+	if len(revisions) != 1 {
+		t.Errorf("%d decision.revised events after a no-op edit, want 1", len(revisions))
+	}
+}
+
+// The other half of A2.1's contract: decision.updated is advisory-only, so no
+// event it carries may name a normative field.
+func TestDecisionUpdated_NeverNamesANormativeField(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+
+	// Every write path that emits either kind.
+	if err := s.EditProposed(d.ID, DecisionInput{
+		Title: "rewritten", Body: "new body", Scope: []string{"cmd/**"},
+	}, types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+	conf := 0.5
+	if err := s.UpdateMetadata(d.ID, MetadataUpdate{Confidence: &conf}, types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearPendingTopicKey(d.ID, types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+
 	updates, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDecisionUpdated})
-	if len(updates) != 1 {
-		t.Errorf("%d decision.updated events after a no-op edit, want 1", len(updates))
+	for _, ev := range updates {
+		fields, _ := ev.Payload["fields"].([]any)
+		for _, f := range fields {
+			if name, _ := f.(string); types.IsNormativeDecisionField(name) {
+				t.Errorf("decision.updated names the normative field %q — a consumer "+
+					"filtering by kind would read a normative change as advisory noise", name)
+			}
+		}
 	}
 }
 
