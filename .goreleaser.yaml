@@ -37,6 +37,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - NOTICE
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
@@ -79,8 +80,8 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
     homepage: https://varve.sh
-    description: "Local-first memory engine for AI coding agents"
-    license: MIT
+    description: "Decision memory for AI coding agents — local-first, MCP-native, one binary"
+    license: Apache-2.0
     test: |
       system "#{bin}/varve", "--version"
     install: |

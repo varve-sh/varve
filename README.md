@@ -121,4 +121,8 @@ Built by [Sebastian Puchet](https://github.com/SebastianPuchet) — [LinkedIn](h
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The license covers the source. It does not grant rights to the **varve** name or
+logo (License §6); trademark status for the name is unresolved. Releases up to
+v1.5.3 were published under MIT and remain available under those terms.
