@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/memtrace-dev/memtrace/internal/scope"
@@ -29,29 +30,54 @@ type DecisionStore struct {
 	// revise, evidence.added — had no way to carry one and landed with a NULL
 	// session_id, which is precisely the set of rows a Tier-3 audit trail is
 	// sold on (F25).
+	//
+	// Guarded by a mutex to match the kernel's own session state. MCP tool
+	// handlers run concurrently, and today no race is reachable — Go's &&
+	// short-circuits, and every MCP-reachable emitter already carries its own
+	// session, so the fields are never read on that path. That is an accident
+	// of the current emitter set, not a design, and the packer changes the
+	// premise: pack.served/pack.item will emit through this store. Making it
+	// deliberate costs a mutex.
+	sessionMu    sync.RWMutex
 	sessionID    string
 	sessionAgent string
 	sessionModel string
 }
 
-// SetSessionContext sets the provenance for events this store writes. The
-// caller is responsible for having announced the session first: emission
-// happens inside a write transaction, and opening a second one to write
-// session.started from in there would deadlock the single writer.
+// SetSessionContext sets the provenance for events this store writes; empty
+// values clear it. The caller is responsible for having announced the session
+// first: emission happens inside a write transaction, and opening a second one
+// to write session.started from in there would deadlock the single writer.
 func (s *DecisionStore) SetSessionContext(id, agent, model string) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
 	s.sessionID, s.sessionAgent, s.sessionModel = id, agent, model
 }
 
 // emit appends an event, filling in the store's session provenance when the
 // emitter did not set its own.
+//
+// The once-emitters (appendEventOnce: diff.scope_match, decision.expired)
+// deliberately bypass this and carry no session stamp. The reason is that they
+// are written through a different function, not that they are a different
+// category of event — decision.violated and revert.detected are equally system
+// observations and are stamped, because they go through emit. §D7 lists no
+// session_id for any of the three, so nothing is owed either way; if a
+// once-emitted kind ever needs the stamp, it needs an emitOnce, not an
+// argument about categories.
 func (s *DecisionStore) emit(tx *sql.Tx, in EventInput) (string, error) {
-	if in.SessionID == "" && s.sessionID != "" {
-		in.SessionID = s.sessionID
-		if in.Agent == "" {
-			in.Agent = s.sessionAgent
-		}
-		if in.Model == "" {
-			in.Model = s.sessionModel
+	if in.SessionID == "" {
+		s.sessionMu.RLock()
+		id, agent, model := s.sessionID, s.sessionAgent, s.sessionModel
+		s.sessionMu.RUnlock()
+		if id != "" {
+			in.SessionID = id
+			if in.Agent == "" {
+				in.Agent = agent
+			}
+			if in.Model == "" {
+				in.Model = model
+			}
 		}
 	}
 	return appendEvent(tx, in)

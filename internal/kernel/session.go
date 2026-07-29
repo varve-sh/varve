@@ -54,6 +54,10 @@ func (k *MemoryKernel) SetSession(id, agent, model string) {
 	k.session.id, k.session.agent, k.session.model = id, agent, model
 	k.session.started = false
 	k.session.saves, k.session.recalls, k.session.packs = 0, 0, 0
+	// The store's copy is set by governanceStamp, once the session has been
+	// announced; registering a new session must not leave the previous one's
+	// provenance behind.
+	k.decisions.SetSessionContext("", "", "")
 }
 
 // BeginSession registers a session and emits session.started immediately. This
@@ -179,6 +183,12 @@ func (k *MemoryKernel) EndSession() {
 	}
 	k.session.id, k.session.started = "", false
 	k.session.mu.Unlock()
+
+	// The decision store holds its own copy of the provenance (F25). Clearing
+	// the kernel's and not the store's would leave later events stamped with a
+	// session that has already ended — a window the packer would walk straight
+	// into.
+	k.decisions.SetSessionContext("", "", "")
 
 	_ = k.decisions.withTx(func(tx *sql.Tx) error {
 		_, err := appendEvent(tx, EventInput{

@@ -229,3 +229,53 @@ func TestPromoteNote_RejectionLeavesTheNoteAlone(t *testing.T) {
 		t.Errorf("note status = %v (%v), want active", got.Status, err)
 	}
 }
+
+// The session provenance the decision store holds must not outlive the session
+// itself. EndSession cleared the kernel's copy and not the store's, so an event
+// emitted afterwards would still be stamped with a session that had already
+// ended — a window the packer walks straight into, since pack.served and
+// pack.item emit through this store.
+func TestEndSession_ClearsTheStoresProvenanceToo(t *testing.T) {
+	k := sessionKernel(t)
+	defer k.Close()
+
+	id := util.GenerateID()
+	k.SetSession(id, SessionAgentCLI, "")
+
+	d, err := k.Decisions().Propose(DecisionInput{
+		ProjectID: testProject, Title: "Sessions live in Redis.",
+		Source: types.DecisionSourceUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.AddDecisionEvidence(d.ID, EvidenceInput{
+		Kind: types.EvidenceKindCommit, Ref: "9f2c1ab", AddedBy: types.ActorHuman,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.AcceptDecision(d.ID, AcceptOptions{Actor: types.ActorHuman}); err != nil {
+		t.Fatal(err)
+	}
+	accepted := eventsOfKind(t, k, types.EventDecisionAccepted)
+	if len(accepted) != 1 || accepted[0].SessionID != id {
+		t.Fatalf("decision.accepted session = %+v, want %s", accepted, id)
+	}
+
+	k.EndSession()
+
+	// Anything written afterwards belongs to no session.
+	if err := k.Decisions().UpdateMetadata(d.ID, MetadataUpdate{
+		Tags: &[]string{"auth"},
+	}, types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+	updated := eventsOfKind(t, k, types.EventDecisionUpdated)
+	if len(updated) != 1 {
+		t.Fatalf("decision.updated events = %d, want 1", len(updated))
+	}
+	if updated[0].SessionID != "" {
+		t.Errorf("event written after session.ended carries session %q, want none",
+			updated[0].SessionID)
+	}
+}
