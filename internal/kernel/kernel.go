@@ -340,6 +340,13 @@ func (k *MemoryKernel) Count(memType types.MemoryType, status types.MemoryStatus
 	return k.store.Count(memType, status)
 }
 
+// CountByType and CountByStatus group every row, terminal states included, so
+// a caller printing both axes gets breakdowns that agree with each other.
+func (k *MemoryKernel) CountByType() (map[string]int, error) { return k.store.CountByType() }
+
+// CountByStatus groups every row by status.
+func (k *MemoryKernel) CountByStatus() (map[string]int, error) { return k.store.CountByStatus() }
+
 // Recall searches memories using the retrieval pipeline, then updates access tracking.
 func (k *MemoryKernel) Recall(input types.MemoryRecallInput) ([]types.ScoredMemory, error) {
 	if input.Limit <= 0 {

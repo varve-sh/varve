@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -221,6 +222,62 @@ func TestStatusCmd_HumanOutputAccountsForEveryRow(t *testing.T) {
 	// One proposed decision plus one active note — both must be named.
 	if !strings.Contains(out, "1 proposed") || !strings.Contains(out, "1 active") {
 		t.Errorf("the status line does not account for its own total:\n%s", out)
+	}
+}
+
+// F24: the *type* axis has to account for the same population as the total and
+// the status axis. It counted live rows only while the total summed every
+// bucket, so one terminal decision made the breakdown quietly short — the same
+// defect as F14, on the other axis. The F14 test could not see it because its
+// store had no terminal rows.
+func TestStatusCmd_BothAxesCountTheSameRows(t *testing.T) {
+	k, _ := proposedProject(t)
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	if err := k.Decisions().Reject(ds[0].ID, "duplicate"); err != nil {
+		t.Fatal(err)
+	}
+	// Store now holds: 1 rejected decision, 1 active note.
+
+	out, err := runCmd(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Memories:  2 total") {
+		t.Errorf("total is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "decision:    1") {
+		t.Errorf("the rejected decision is missing from the type breakdown:\n%s", out)
+	}
+	if !strings.Contains(out, "note:        1") {
+		t.Errorf("the note is missing from the type breakdown:\n%s", out)
+	}
+	if !strings.Contains(out, "1 rejected") {
+		t.Errorf("the status line does not name the terminal row:\n%s", out)
+	}
+
+	// And the JSON path, where a consumer can actually add them up.
+	jsonOut, err := runCmd(t, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, jsonOut)
+	}
+	var got struct {
+		Total    int            `json:"total"`
+		ByType   map[string]int `json:"by_type"`
+		ByStatus map[string]int `json:"by_status"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonOut)), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	sum := func(m map[string]int) int {
+		n := 0
+		for _, v := range m {
+			n += v
+		}
+		return n
+	}
+	if sum(got.ByType) != got.Total || sum(got.ByStatus) != got.Total {
+		t.Errorf("axes disagree: total=%d by_type=%d by_status=%d (%v / %v)",
+			got.Total, sum(got.ByType), sum(got.ByStatus), got.ByType, got.ByStatus)
 	}
 }
 

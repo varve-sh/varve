@@ -306,6 +306,45 @@ func (s *MemoryStore) Count(memType types.MemoryType, status types.MemoryStatus)
 	return n, err
 }
 
+// CountByType and CountByStatus group *every* row, terminal states included.
+//
+// They exist because the two axes have to agree: `status` prints a total and a
+// breakdown on each axis, and a live-only type count against an all-status
+// total silently loses rows — one rejected decision made "4 total" break down
+// as "decision: 1, note: 2" (F24, the same defect class as F14 on the other
+// axis). Live-only counting stays available through Count with an explicit
+// filter; these two are deliberately unfiltered.
+func (s *MemoryStore) CountByType() (map[string]int, error) {
+	return s.groupCount("type")
+}
+
+func (s *MemoryStore) CountByStatus() (map[string]int, error) {
+	return s.groupCount("status")
+}
+
+func (s *MemoryStore) groupCount(column string) (map[string]int, error) {
+	if column != "type" && column != "status" {
+		return nil, fmt.Errorf("invalid column: %s", column)
+	}
+	rows, err := s.db.Query(`SELECT m.` + column + `, COUNT(*)
+	                           FROM (` + memoryProjection + `) m
+	                          GROUP BY m.` + column)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var key string
+		var n int
+		if err := rows.Scan(&key, &n); err != nil {
+			return nil, err
+		}
+		out[key] = n
+	}
+	return out, rows.Err()
+}
+
 // CountSince returns the number of live memories whose column (created_at or
 // accessed_at) is >= since.
 func (s *MemoryStore) CountSince(column string, since time.Time) (int, error) {

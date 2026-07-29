@@ -30,39 +30,16 @@ func newStatusCmd() *cobra.Command {
 			entry := cfg.Projects[projectRoot]
 			dbPath := util.GetProjectDbPath(projectRoot)
 
-			// Count by type
-			counts := map[string]int{}
-			// The v2 schema has three classes: two governed (decision,
-			// convention) and one note class — `fact` and `event` were
-			// collapsed, and what they distinguished now lives in tags
-			// (ADR-0001 D1, D9).
-			for _, t := range []types.MemoryType{
-				types.MemoryTypeDecision,
-				types.MemoryTypeConvention,
-				types.MemoryTypeNote,
-			} {
-				n, _ := k.Count(t, "")
-				counts[string(t)] = n
+			// Both axes count *every* row, terminal states included, so the two
+			// breakdowns and the total are the same population. Counting types
+			// live-only against an all-status total lost rows silently (F24).
+			counts, err := k.CountByType()
+			if err != nil {
+				return err
 			}
-
-			// Count by status
-			statusCounts := map[string]int{}
-			// Note statuses plus the six decision lifecycle states (D2).
-			for _, s := range []types.MemoryStatus{
-				types.MemoryStatusActive,
-				types.MemoryStatusStale,
-				types.MemoryStatusArchived,
-				types.MemoryStatus(types.StatusProposed),
-				types.MemoryStatus(types.StatusViolated),
-				types.MemoryStatus(types.StatusSuperseded),
-				types.MemoryStatus(types.StatusReverted),
-				types.MemoryStatus(types.StatusRejected),
-			} {
-				n, _ := k.Count("", s)
-				if n == 0 {
-					continue
-				}
-				statusCounts[string(s)] = n
+			statusCounts, err := k.CountByStatus()
+			if err != nil {
+				return err
 			}
 			total := 0
 			for _, n := range statusCounts {
