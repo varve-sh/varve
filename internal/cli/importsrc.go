@@ -328,12 +328,16 @@ func confirm(cmd *cobra.Command, prompt string) bool {
 	out := cmd.OutOrStdout()
 	in := cmd.InOrStdin()
 	if f, ok := in.(*os.File); ok && !isTerminal(f) {
-		fmt.Fprintln(out, "Not running interactively and --yes was not given; nothing was imported.")
+		fmt.Fprintln(out, "Not running interactively; nothing was imported. Re-run with --yes.")
 		return false
 	}
 	fmt.Fprint(out, prompt)
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil {
+		// EOF: stdin exists but has nothing to say — /dev/null, a closed pipe,
+		// a CI job. Same answer, same hint, so the flag is discoverable from
+		// whichever non-interactive shape the caller happens to have.
+		fmt.Fprintln(out, "\nNo answer on stdin; nothing was imported. Re-run with --yes.")
 		return false
 	}
 	line = strings.ToLower(strings.TrimSpace(line))
