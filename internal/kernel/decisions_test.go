@@ -1411,3 +1411,38 @@ func TestReinstate_LeavesDecisionsWithOtherOpenEpisodesViolated(t *testing.T) {
 		t.Errorf("second decision reinstated before its zero-crossing: %d events", len(evs))
 	}
 }
+
+// F22. A2.2 defines an episode as a verdict on a *distinct violating commit*.
+// Without a sha the episode has no identity: idx_events_scopematch_once is
+// UNIQUE(decision_id, commit_sha) and SQLite treats NULLs as distinct, so the
+// schema-level idempotency the emission argument rests on does not fire, and
+// unresolvedViolationsSQL's revert clause can never match. Ten such calls
+// meant ten permanently unresolved episodes and a §P8 marker climbing without
+// bound.
+func TestMarkViolated_RequiresAViolatingCommit(t *testing.T) {
+	s := newDecisionStore(t)
+	d, _ := s.Propose(baseInput())
+	addCommitEvidence(t, s, d.ID, "sha-accept")
+	s.Accept(d.ID, AcceptOptions{})
+
+	for i := 0; i < 3; i++ {
+		recorded, err := s.MarkViolated(d.ID, ViolationOptions{
+			Files: []string{"internal/x.go"}, MatchedGlobs: []string{"internal/**"},
+		})
+		if !errors.Is(err, types.ErrValidation) {
+			t.Fatalf("MarkViolated with no commit = (%v, %v), want a validation error", recorded, err)
+		}
+		if recorded {
+			t.Fatal("an episode was recorded without a violating commit")
+		}
+	}
+	if got, _ := s.GetDecision(d.ID); got.Status != types.StatusActive {
+		t.Errorf("status = %s, want active — nothing legitimate happened", got.Status)
+	}
+	if n, _ := s.UnresolvedViolations(d.ID); n != 0 {
+		t.Errorf("unresolved = %d, want 0", n)
+	}
+	if evs, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDiffScopeMatch}); len(evs) != 0 {
+		t.Errorf("%d diff.scope_match rows with a NULL commit_sha, want 0", len(evs))
+	}
+}

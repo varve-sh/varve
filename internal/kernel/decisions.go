@@ -661,6 +661,22 @@ type ViolationOptions struct {
 //
 // Reports whether a new episode was recorded.
 func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) (bool, error) {
+	// An episode *is* a verdict on a distinct violating commit (A2.2), so the
+	// commit is what gives it identity, and without one two invariants break at
+	// once: idx_events_scopematch_once is UNIQUE(decision_id, commit_sha) and
+	// SQLite treats NULLs as distinct in unique indexes, so the schema-level
+	// idempotency this method's whole argument rests on would not fire and
+	// every call would create another episode; and unresolvedViolationsSQL's
+	// revert clause needs a sha, so none of those episodes could ever be
+	// resolved by anything but a dismissal naming its exact event id. §P8's
+	// marker would climb without bound.
+	if opts.CommitSHA == "" {
+		return false, &types.ValidationError{
+			Field:   "commit_sha",
+			Message: "a violation episode is a verdict on a distinct violating commit; without one it has no identity and can never be resolved",
+		}
+	}
+
 	var recorded bool
 	err := s.withTx(func(tx *sql.Tx) error {
 		d, err := loadDecisionTx(tx, id)
