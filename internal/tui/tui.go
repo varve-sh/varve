@@ -277,11 +277,11 @@ func (m model) View() string {
 		if m.selected == nil {
 			return ""
 		}
-		help := styleHelp.Render("↑/↓: scroll  e: edit  d: delete  esc: back  q: quit")
+		help := styleHelp.Render("↑/↓: scroll  e: edit  d: forget  esc: back  q: quit")
 		return styleApp.Render(m.detail.View()) + "\n" + help
 
 	case viewConfirmDelete:
-		confirm := styleConfirmBar.Render("Delete this memory? (y/n)")
+		confirm := styleConfirmBar.Render(disposalPrompt(m.selected))
 		preview := ""
 		if m.selected != nil {
 			preview = styleDetail.Render(truncate(m.selected.Content, 80))
@@ -289,6 +289,31 @@ func (m model) View() string {
 		return styleApp.Render(m.detail.View()) + "\n" + confirm + "  " + preview
 	}
 	return ""
+}
+
+// disposalPrompt says what pressing y will actually do.
+//
+// `d` calls kernel.Delete, which for a decision is not a delete at all: a
+// proposal is *rejected* and a binding decision is *reverted*, both terminal
+// and both irreversible (§D3 — a decision with history is never hard-deleted,
+// so "forget" maps onto the lifecycle). Prompting "Delete this memory?" for
+// those hid an irreversible governance action behind a word that described
+// neither.
+func disposalPrompt(mem *types.Memory) string {
+	if mem == nil {
+		return "Forget this memory? (y/n)"
+	}
+	if !mem.Type.IsDecision() {
+		return "Delete this note? This removes it permanently. (y/n)"
+	}
+	switch types.DecisionStatus(mem.Status) {
+	case types.StatusProposed:
+		return "Reject this proposal? It is recorded as rejected, not deleted, and cannot be accepted afterwards. (y/n)"
+	case types.StatusActive, types.StatusViolated:
+		return "Revert this decision? This is terminal: re-adopting it later means a new decision. (y/n)"
+	default:
+		return "This decision is already terminal — nothing to forget. (n to go back)"
+	}
 }
 
 func (m model) openEditor() tea.Cmd {

@@ -316,8 +316,13 @@ func (k *MemoryKernel) Delete(id string) (bool, error) {
 	}
 	switch d.Status {
 	case types.StatusProposed:
-		return true, k.decisions.Reject(id, "forgotten")
+		// No reason is invented here. The event records a human rejecting the
+		// proposal, which is what happened; "forgotten" was a justification the
+		// user never gave, and it is append-only once written.
+		k.governanceStamp()
+		return true, k.decisions.Reject(id, "")
 	case types.StatusActive, types.StatusViolated:
+		k.governanceStamp()
 		return true, k.decisions.Revert(id, RevertOptions{Via: "human", Actor: types.ActorHuman})
 	default:
 		return false, nil // already terminal — nothing to do
