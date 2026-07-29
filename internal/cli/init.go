@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memtrace-dev/memtrace/internal/ingestion"
 	"github.com/memtrace-dev/memtrace/internal/kernel"
 	"github.com/memtrace-dev/memtrace/internal/util"
 	"github.com/spf13/cobra"
@@ -87,20 +86,26 @@ func newInitCmd() *cobra.Command {
 			// Add memtrace instructions to CLAUDE.md (Claude Code only)
 			addToClaudeMd(projectRoot)
 
-			// Run importers unless --no-import
-			var result *ingestion.IngestResult
-			if !noImport {
-				pipeline := ingestion.New(k)
-				result = pipeline.IngestOnInit(projectRoot)
-			}
-
 			fmt.Printf("Initialized memtrace in %s\n", projectRoot)
-			if result != nil && result.Total > 0 {
-				parts := []string{}
-				for src, n := range result.Sources {
-					parts = append(parts, fmt.Sprintf("%s: %d", src, n))
+
+			// ADR-0005 §D2.6: init *offers* an import instead of running one.
+			// It replaces IngestOnInit's silent bulk save — no dedup key, no
+			// batch identity, no report — with the same batch machinery every
+			// other entry point uses, so there is exactly one import code path.
+			if !noImport {
+				found := ProbeAll(projectRoot)
+				if len(found) > 0 {
+					fmt.Println("\nFound existing memory:")
+					for _, p := range found {
+						if p.Refusal != nil {
+							fmt.Printf("  %-16s %v\n", p.Source, p.Refusal)
+							continue
+						}
+						fmt.Printf("  %-16s %s\n", p.Source, p.Detail)
+					}
+					fmt.Println("\nImport it with: memtrace import claude-mem | engram | rules")
+					fmt.Println("Everything lands as proposed or notes, and `memtrace import undo` reverses it.")
 				}
-				fmt.Printf("Imported %d memories (%s)\n", result.Total, strings.Join(parts, ", "))
 			}
 
 			// §D1.1: offer the hook (default yes, declinable). It never blocks,

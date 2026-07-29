@@ -249,6 +249,13 @@ func TestUndoImport_DefaultsToLatestBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A third run against unchanged sources creates nothing. `undo` with no
+	// argument must skip it — the stranger's advertised sequence is import,
+	// read the report, undo, and an empty batch has nothing to undo.
+	if _, err := k.ImportBatch("engram", importFixture(), false); err != nil {
+		t.Fatal(err)
+	}
+
 	undo, err := k.UndoImport("")
 	if err != nil {
 		t.Fatal(err)

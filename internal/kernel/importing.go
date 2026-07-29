@@ -78,7 +78,17 @@ type ImportBatchResult struct {
 //     migrated rows, falsifier 4 against migrated scopes), and both times the
 //     defect was a timestamp that described the source rather than the event.
 func (k *MemoryKernel) ImportBatch(source string, candidates []ImportCandidate, dryRun bool) (*ImportBatchResult, error) {
-	res := &ImportBatchResult{BatchID: util.GenerateID(), Source: source, DryRun: dryRun}
+	return k.ImportBatchInto("", source, candidates, dryRun)
+}
+
+// ImportBatchInto is ImportBatch with a caller-supplied batch id, so one
+// `varve import` run over several sources is one undoable batch (§D2.3) while
+// still emitting one `import.completed` per source (§D6).
+func (k *MemoryKernel) ImportBatchInto(batchID, source string, candidates []ImportCandidate, dryRun bool) (*ImportBatchResult, error) {
+	if batchID == "" {
+		batchID = util.GenerateID()
+	}
+	res := &ImportBatchResult{BatchID: batchID, Source: source, DryRun: dryRun}
 	batchTag := ImportBatchTagPrefix + res.BatchID
 
 	for _, c := range candidates {
@@ -377,12 +387,23 @@ func (k *MemoryKernel) recordImportUndone(res *ImportUndoResult) error {
 	})
 }
 
-// LatestImportBatch returns the most recent batch id, or "".
+// LatestImportBatch returns the most recent batch that actually created rows,
+// or "" when there are none.
+//
+// The "created rows" filter is what makes `import undo` with no argument mean
+// what a user means by it. A re-run against unchanged sources is idempotent —
+// it creates nothing and emits an `import.completed` with all-skipped counts —
+// so without this filter the sequence the ADR advertises for a stranger
+// (import, read the report, undo) would undo an empty batch and leave the rows
+// in place. An empty batch has nothing to undo; the next one back does.
 func (k *MemoryKernel) LatestImportBatch() (string, error) {
 	var batch string
 	err := k.db.QueryRow(`
 		SELECT json_extract(payload, '$.batch') FROM events
-		 WHERE kind = 'import.completed' ORDER BY seq DESC LIMIT 1`).Scan(&batch)
+		 WHERE kind = 'import.completed'
+		   AND (json_extract(payload, '$.decisions') > 0
+		     OR json_extract(payload, '$.notes') > 0)
+		 ORDER BY seq DESC LIMIT 1`).Scan(&batch)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}

@@ -35,6 +35,7 @@ func NewRootCmd(version ...string) *cobra.Command {
 		newObserveCmd(),
 		newHooksCmd(),
 		newReportCmd(),
+		newLintCmd(),
 		newMigrateCmd(),
 		newDoctorCmd(),
 		newConfigCmd(),

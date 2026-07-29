@@ -10,14 +10,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// listSources prints the probe results for `import` with no arguments.
+func listSources(cmd *cobra.Command) error {
+	_, root, err := openKernel()
+	if err != nil {
+		return err
+	}
+	found := ProbeAll(root)
+	out := cmd.OutOrStdout()
+	if len(found) == 0 {
+		fmt.Fprintln(out, "No known memory sources found.")
+		return nil
+	}
+	fmt.Fprintln(out, "Found:")
+	for _, p := range found {
+		if p.Refusal != nil {
+			fmt.Fprintf(out, "  %-16s %v\n", p.Source, p.Refusal)
+			continue
+		}
+		fmt.Fprintf(out, "  %-16s %s (%s)\n", p.Source, p.Detail, p.Path)
+	}
+	fmt.Fprintln(out, "\nImport one with: memtrace import claude-mem | engram | rules")
+	fmt.Fprintln(out, "Everything imports as proposed or notes; undo with: memtrace import undo")
+	return nil
+}
+
 func newImportCmd() *cobra.Command {
 	var memType string
 	var format string
 	var dryRun bool
 
 	cmd := &cobra.Command{
-		Use:   "import <file|url>",
-		Short: "Import memories from a JSON or Markdown file or URL",
+		Use:   "import [file|url]",
+		Short: "Import from a memory store, a rules file, or a JSON/Markdown export",
 		Long: `Import memories from a file or HTTP/HTTPS URL.
 
 Supported formats:
@@ -25,8 +50,14 @@ Supported formats:
   Markdown — memtrace export format (.md files are auto-detected)
 
 Use --dry-run to preview what would be imported without saving.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				// Bare `import` probes the known sources and says what it found
+				// (ADR-0005 §D2.1). It imports nothing on its own: the user
+				// picks a source, so nothing is ever ingested silently.
+				return listSources(cmd)
+			}
 			source := args[0]
 
 			useMarkdown := format == "markdown"
@@ -95,5 +126,6 @@ Use --dry-run to preview what would be imported without saving.`,
 	cmd.Flags().StringVar(&memType, "type", "", "Only import memories of this type: decision, convention, note")
 	cmd.Flags().StringVar(&format, "format", "", "Force format: json, markdown (default: auto-detect by extension)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview what would be imported without saving")
+	cmd.AddCommand(newImportSourceCmds()...)
 	return cmd
 }
