@@ -14,9 +14,16 @@ memory_save(
   type:       "decision",             // decision | convention | note
   tags:       ["auth", "security"],
   file_paths: ["src/middleware/auth.go"],
-  topic_key:  "decision/auth"         // optional — re-saving with the same key updates instead of creating a duplicate
+  topic_key:  "decision/auth"         // optional — see the topic_key note below
 )
 ```
+
+**Decisions and conventions are governed.** One saved over MCP lands
+`proposed`: it is captured, but it does not bind and is never packed into
+context until a human accepts it (`memtrace decision accept <id>`). Surface
+pending proposals to the user rather than assuming the save took effect.
+Acceptance and rejection are CLI/TUI actions — there is no MCP tool for them,
+by design.
 
 **Parameters**
 
@@ -26,7 +33,7 @@ memory_save(
 | `type` | no | `decision`, `convention` or `note`. `fact` and `event` are accepted as synonyms for `note`. Default: `note`. |
 | `tags` | no | Array of strings for categorization. |
 | `file_paths` | no | Paths relative to project root. Used by `memory_context` to surface this memory when editing related files. |
-| `topic_key` | no | Stable identifier (e.g. `"convention/error-handling"`). Re-saving with the same key updates the memory instead of creating a duplicate. |
+| `topic_key` | no | Stable identifier (e.g. `"convention/error-handling"`). **Notes:** re-saving with the same key updates the note in place. **Decisions and conventions:** re-saving creates a *new* `proposed` decision that supersedes the current holder once a human accepts it — the call returns a new id and the earlier decision is not mutated. The two namespaces are separate: a note and a decision may hold the same key. |
 
 **Private content**
 

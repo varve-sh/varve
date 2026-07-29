@@ -57,7 +57,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 	// Tool 1: memory_save
 	s.AddTool(
 		mcp.NewTool("memory_save",
-			mcp.WithDescription("Save a memory (decision, convention or note) to the local memory store. Decisions and conventions are governed: one you save is recorded as proposed and does not bind until a human accepts it. Use this when you learn something important about the project that should persist across sessions. If topic_key is provided and a memory with that key already exists, it is updated instead of creating a duplicate."),
+			mcp.WithDescription("Save a memory (decision, convention or note) to the local memory store. Decisions and conventions are governed: one you save is recorded as proposed and does not bind or get packed into context until a human accepts it with `memtrace decision accept` — tell the user it is pending rather than assuming it took effect. `fact` and `event` are synonyms for `note`: retrievable, ungoverned. Use this when you learn something important about the project that should persist across sessions. topic_key behaviour differs by type: for a note, re-saving with the same key updates it in place; for a decision or convention, it creates a *new* proposed decision that supersedes the current holder once accepted, and returns a new id."),
 			mcp.WithString("content",
 				mcp.Required(),
 				mcp.Description("The memory content to save. Be specific and self-contained. Wrap sensitive details in <private>...</private> to prevent them from being stored."),
@@ -72,7 +72,7 @@ func registerTools(s *server.MCPServer, k *kernel.MemoryKernel, tracker *session
 				mcp.Description(`Related file paths relative to project root, e.g. ["src/auth/middleware.go"]`),
 			),
 			mcp.WithString("topic_key",
-				mcp.Description(`Stable identifier for this memory, e.g. "convention/error-handling" or "decision/database". Re-saving with the same key updates the existing memory instead of creating a duplicate.`),
+				mcp.Description(`Stable identifier for this memory, e.g. "convention/error-handling" or "decision/database". For a note, re-saving with the same key updates it in place. For a decision or convention, it creates a new proposed successor that supersedes the current holder when a human accepts it — the save returns a new id and does not mutate the earlier one.`),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
