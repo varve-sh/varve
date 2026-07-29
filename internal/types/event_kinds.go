@@ -89,8 +89,26 @@ var NormativeDecisionFields = map[string]bool{
 	"pending_topic_key": true,
 }
 
+// AdvisoryDecisionFields is the other half of A2.1's contract: fields a
+// `decision.updated` may name. Keeping both sets published makes the contract
+// checkable in both directions — a `decision.revised` naming an advisory field
+// is as much a breach as the reverse, and only one of the two was watched.
+var AdvisoryDecisionFields = map[string]bool{
+	"tags":       true,
+	"confidence": true,
+	"expires_at": true,
+}
+
 // IsNormativeDecisionField reports whether a field name is normative (A2.1).
+//
+// Note on `supersedes`: it is normative and today no code path edits it. §D5
+// describes "the predecessor was removed from `supersedes` while proposed" as
+// a real route to ErrTopicKeyHeld, so the set describes the contract that
+// editing API will have to meet, not one that exists yet.
 func IsNormativeDecisionField(field string) bool { return NormativeDecisionFields[field] }
+
+// IsAdvisoryDecisionField reports whether a field name is advisory (A2.1).
+func IsAdvisoryDecisionField(field string) bool { return AdvisoryDecisionFields[field] }
 
 // IsKnownEventKind reports whether k is in the ADR-0001 §D7 catalogue.
 func IsKnownEventKind(k EventKind) bool { return knownEventKinds[k] }

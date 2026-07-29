@@ -14,8 +14,10 @@ import (
 // Two shapes exist and both are specified:
 //
 //   - One MCP connection is one session. `session.started` is emitted when the
-//     server begins serving and `session.ended` at close, with `agent`/`model`
-//     from the client where the handshake provides them.
+//     server begins serving and `session.ended` at close. `agent` is the
+//     constant "mcp" and `model` is empty: the events are written when the
+//     connection opens, before any client handshake info is available at this
+//     layer, so neither is read from the client today.
 //   - A CLI invocation gets a synthetic per-invocation session carrying
 //     `agent = 'cli'`, which every coverage denominator excludes (§D3
 //     amendment 3). It is registered lazily — the events are written the first
@@ -62,6 +64,40 @@ func (k *MemoryKernel) BeginSession(agent, model string) string {
 	k.SetSession(id, agent, model)
 	k.ensureSession()
 	return id
+}
+
+// governanceStamp announces the session (if it has not been announced) and
+// hands its provenance to the decision store, so the lifecycle events a human
+// governance action writes — decision.accepted, decision.rejected,
+// decision.revised, evidence.added — carry a session_id instead of NULL. Those
+// are exactly the rows a Tier-3 audit trail is sold on (F25).
+//
+// It runs *before* the governance transaction opens: announcing inside one
+// would need a second write transaction against a single-writer database.
+func (k *MemoryKernel) governanceStamp() {
+	id, agent, model := k.sessionStamp()
+	k.decisions.SetSessionContext(id, agent, model)
+}
+
+// AcceptDecision, RejectDecision and AddDecisionEvidence are the session-aware
+// entry points for human governance actions. They are what the CLI and TUI
+// call; DecisionStore's methods stay available for callers that carry their
+// own provenance (the MCP path) or none (the migration).
+func (k *MemoryKernel) AcceptDecision(id string, opts AcceptOptions) (*types.Decision, error) {
+	k.governanceStamp()
+	return k.decisions.Accept(id, opts)
+}
+
+// RejectDecision declines a proposal, recording the reason (D2).
+func (k *MemoryKernel) RejectDecision(id, reason string) error {
+	k.governanceStamp()
+	return k.decisions.Reject(id, reason)
+}
+
+// AddDecisionEvidence attaches an evidence row (D4).
+func (k *MemoryKernel) AddDecisionEvidence(id string, in EvidenceInput) (*types.Evidence, error) {
+	k.governanceStamp()
+	return k.decisions.AddEvidence(id, in)
 }
 
 // SessionID returns the current session id, or "" when none is registered.

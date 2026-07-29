@@ -121,7 +121,7 @@ func newDecisionAcceptCmd() *cobra.Command {
 			}
 
 			for i, in := range inputs {
-				_, addErr := k.Decisions().AddEvidence(id, in)
+				_, addErr := k.AddDecisionEvidence(id, in)
 				// A duplicate is the benign case — the row the user asked for is
 				// already attached — so it is reported and the acceptance
 				// continues, rather than surfacing a constraint abort.
@@ -134,7 +134,7 @@ func newDecisionAcceptCmd() *cobra.Command {
 				}
 			}
 
-			d, err := k.Decisions().Accept(id, kernel.AcceptOptions{
+			d, err := k.AcceptDecision(id, kernel.AcceptOptions{
 				Force: force,
 				Actor: types.ActorHuman,
 			})
@@ -186,7 +186,7 @@ func newDecisionRejectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := k.Decisions().Reject(id, reason); err != nil {
+			if err := k.RejectDecision(id, reason); err != nil {
 				return err
 			}
 			fmt.Printf("Rejected %s\n", id)

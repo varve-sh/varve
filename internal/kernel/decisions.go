@@ -23,6 +23,38 @@ import (
 // event rather than fabricating per-row histories it never observed.
 type DecisionStore struct {
 	db *sql.DB
+	// session is the provenance stamped on events this store writes when the
+	// emitter does not set its own (ADR-0004 §D3). The MCP path passes the
+	// session on the write itself; CLI governance actions — accept, reject,
+	// revise, evidence.added — had no way to carry one and landed with a NULL
+	// session_id, which is precisely the set of rows a Tier-3 audit trail is
+	// sold on (F25).
+	sessionID    string
+	sessionAgent string
+	sessionModel string
+}
+
+// SetSessionContext sets the provenance for events this store writes. The
+// caller is responsible for having announced the session first: emission
+// happens inside a write transaction, and opening a second one to write
+// session.started from in there would deadlock the single writer.
+func (s *DecisionStore) SetSessionContext(id, agent, model string) {
+	s.sessionID, s.sessionAgent, s.sessionModel = id, agent, model
+}
+
+// emit appends an event, filling in the store's session provenance when the
+// emitter did not set its own.
+func (s *DecisionStore) emit(tx *sql.Tx, in EventInput) (string, error) {
+	if in.SessionID == "" && s.sessionID != "" {
+		in.SessionID = s.sessionID
+		if in.Agent == "" {
+			in.Agent = s.sessionAgent
+		}
+		if in.Model == "" {
+			in.Model = s.sessionModel
+		}
+	}
+	return appendEvent(tx, in)
 }
 
 // NewDecisionStore returns a store over an already-migrated database.
@@ -305,7 +337,7 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 	case pendingTopicKey != "":
 		payload["topic_key"] = pendingTopicKey
 	}
-	if _, err := appendEvent(tx, EventInput{
+	if _, err := s.emit(tx, EventInput{
 		ProjectID:  d.ProjectID,
 		Kind:       types.EventDecisionProposed,
 		Actor:      actorFor(d.Source),
@@ -444,7 +476,7 @@ func (s *DecisionStore) acceptTx(tx *sql.Tx, d *types.Decision, opts AcceptOptio
 	d.StatusChangedAt = now
 	d.UpdatedAt = now
 
-	if _, err := appendEvent(tx, EventInput{
+	if _, err := s.emit(tx, EventInput{
 		ProjectID:  d.ProjectID,
 		Kind:       types.EventDecisionAccepted,
 		Actor:      opts.Actor,
@@ -471,7 +503,7 @@ func (s *DecisionStore) acceptTx(tx *sql.Tx, d *types.Decision, opts AcceptOptio
 			 WHERE id = ?`, d.ID, fmtTime(now), fmtTime(now), predID); err != nil {
 			return fmt.Errorf("superseding %s: %w", predID, err)
 		}
-		if _, err := appendEvent(tx, EventInput{
+		if _, err := s.emit(tx, EventInput{
 			ProjectID:  pred.ProjectID,
 			Kind:       types.EventDecisionSuperseded,
 			Actor:      types.ActorSystem,
@@ -573,7 +605,7 @@ func (s *DecisionStore) ClearPendingTopicKey(id string, actor types.Actor) error
 		}
 		// pending_topic_key is in A2.1's normative set, so clearing it is a
 		// revision, not an advisory patch.
-		_, err = appendEvent(tx, EventInput{
+		_, err = s.emit(tx, EventInput{
 			ProjectID:  d.ProjectID,
 			Kind:       types.EventDecisionRevised,
 			Actor:      actor,
@@ -727,7 +759,7 @@ func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) (bool, er
 		if d.Status == types.StatusViolated {
 			// A further episode on an already-violated decision: the event, and
 			// no state change.
-			_, err := appendEvent(tx, EventInput{
+			_, err := s.emit(tx, EventInput{
 				ProjectID:  d.ProjectID,
 				Kind:       types.EventDecisionViolated,
 				Actor:      types.ActorSystem,
@@ -737,7 +769,7 @@ func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) (bool, er
 			})
 			return err
 		}
-		return applyTransitionTx(tx, d, types.StatusViolated,
+		return s.applyTransitionTx(tx, d, types.StatusViolated,
 			types.EventDecisionViolated, types.ActorSystem, payload, opts.CommitSHA)
 	})
 	return recorded, err
@@ -812,7 +844,7 @@ func (s *DecisionStore) Reinstate(id string, opts ReinstateOptions) error {
 				return err
 			}
 			if existing == 0 {
-				if _, err := appendEvent(tx, EventInput{
+				if _, err := s.emit(tx, EventInput{
 					ProjectID: d.ProjectID,
 					Kind:      types.EventRevertDetected,
 					Actor:     types.ActorSystem,
@@ -879,7 +911,7 @@ func (s *DecisionStore) Reinstate(id string, opts ReinstateOptions) error {
 				// no reinstatement event is emitted. §P8's marker keeps counting.
 				continue
 			}
-			if err := applyTransitionTx(tx, target, types.StatusActive,
+			if err := s.applyTransitionTx(tx, target, types.StatusActive,
 				types.EventDecisionReinstated, types.ActorSystem,
 				map[string]any{"via": "counter_revert"}, opts.CommitSHA); err != nil {
 				return err
@@ -932,7 +964,7 @@ func (s *DecisionStore) DismissViolation(id, violationEventID, reason string) er
 			return fmt.Errorf("%w: %s", types.ErrViolationAlreadyResolved, violationEventID)
 		}
 
-		if _, err := appendEvent(tx, EventInput{
+		if _, err := s.emit(tx, EventInput{
 			ProjectID:  d.ProjectID,
 			Kind:       types.EventDecisionViolationDismissed,
 			Actor:      types.ActorHuman,
@@ -955,7 +987,7 @@ func (s *DecisionStore) DismissViolation(id, violationEventID, reason string) er
 		if unresolved > 0 {
 			return nil // other episodes remain open
 		}
-		return applyTransitionTx(tx, d, types.StatusActive, types.EventDecisionReinstated,
+		return s.applyTransitionTx(tx, d, types.StatusActive, types.EventDecisionReinstated,
 			types.ActorHuman, map[string]any{"via": "dismissal"}, "")
 	})
 }
@@ -1077,7 +1109,7 @@ func (s *DecisionStore) UpdateMetadata(id string, up MetadataUpdate, actor types
 		if _, err := tx.Exec(`UPDATE decisions SET `+joinComma(sets)+` WHERE id = ?`, args...); err != nil {
 			return fmt.Errorf("updating decision metadata: %w", err)
 		}
-		_, err = appendEvent(tx, EventInput{
+		_, err = s.emit(tx, EventInput{
 			ProjectID:  d.ProjectID,
 			Kind:       types.EventDecisionUpdated,
 			Actor:      actor,
@@ -1152,7 +1184,7 @@ func (s *DecisionStore) EditProposed(id string, in DecisionInput, actor types.Ac
 		// audit trail. Pre-amendment decision.updated rows carrying normative
 		// field names are grandfathered: events are append-only and are not
 		// rewritten.
-		_, err = appendEvent(tx, EventInput{
+		_, err = s.emit(tx, EventInput{
 			ProjectID:  d.ProjectID,
 			Kind:       types.EventDecisionRevised,
 			Actor:      actor,
@@ -1195,7 +1227,7 @@ func (s *DecisionStore) AddEvidence(decisionID string, in EvidenceInput) (*types
 			return err
 		}
 		out = ev
-		_, err = appendEvent(tx, EventInput{
+		_, err = s.emit(tx, EventInput{
 			ProjectID:  d.ProjectID,
 			Kind:       types.EventEvidenceAdded,
 			Actor:      in.AddedBy,
@@ -1389,11 +1421,11 @@ func (s *DecisionStore) transition(
 		if err := types.CheckTransition(d.Status, to); err != nil {
 			return err
 		}
-		return applyTransitionTx(tx, d, to, kind, actor, payload(d), commitSHA)
+		return s.applyTransitionTx(tx, d, to, kind, actor, payload(d), commitSHA)
 	})
 }
 
-func applyTransitionTx(
+func (s *DecisionStore) applyTransitionTx(
 	tx *sql.Tx, d *types.Decision, to types.DecisionStatus,
 	kind types.EventKind, actor types.Actor, payload map[string]any, commitSHA string,
 ) error {
@@ -1407,7 +1439,7 @@ func applyTransitionTx(
 	d.StatusChangedAt = now
 	d.UpdatedAt = now
 
-	_, err := appendEvent(tx, EventInput{
+	_, err := s.emit(tx, EventInput{
 		ProjectID:  d.ProjectID,
 		Kind:       kind,
 		Actor:      actor,

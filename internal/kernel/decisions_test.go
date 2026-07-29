@@ -1099,12 +1099,36 @@ func TestDecisionUpdated_NeverNamesANormativeField(t *testing.T) {
 	}
 
 	updates, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDecisionUpdated})
+	if len(updates) == 0 {
+		t.Fatal("no decision.updated events were emitted; the sweep proves nothing")
+	}
 	for _, ev := range updates {
 		fields, _ := ev.Payload["fields"].([]any)
 		for _, f := range fields {
 			if name, _ := f.(string); types.IsNormativeDecisionField(name) {
 				t.Errorf("decision.updated names the normative field %q — a consumer "+
 					"filtering by kind would read a normative change as advisory noise", name)
+			}
+		}
+	}
+
+	// The other direction, which nothing watched: a decision.revised naming an
+	// advisory field breaks the same contract (F27). It would fire the day
+	// EditProposed gains expires_at.
+	revisions, _ := s.Events(EventFilter{DecisionID: d.ID, Kind: types.EventDecisionRevised})
+	if len(revisions) == 0 {
+		t.Fatal("no decision.revised events were emitted; the sweep proves nothing")
+	}
+	for _, ev := range revisions {
+		fields, _ := ev.Payload["fields"].([]any)
+		for _, f := range fields {
+			name, _ := f.(string)
+			if types.IsAdvisoryDecisionField(name) {
+				t.Errorf("decision.revised names the advisory field %q", name)
+			}
+			if !types.IsNormativeDecisionField(name) {
+				t.Errorf("decision.revised names %q, which is in neither published set — "+
+					"the field belongs in one of them before it is emitted", name)
 			}
 		}
 	}

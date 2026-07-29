@@ -410,3 +410,41 @@ func TestDecisionAcceptCmd_EvidenceIsCheckedBeforeItIsWritten(t *testing.T) {
 		}
 	}
 }
+
+// F25: the synthetic CLI session was minted and then used by nothing but
+// recall.served. A human governance action — accept, reject, the evidence it
+// attaches — is exactly the row a Tier-3 audit trail is sold on, and it landed
+// with a NULL session_id.
+func TestDecisionCmds_GovernanceActionsCarryTheCLISession(t *testing.T) {
+	k, _ := proposedProject(t)
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	id := ds[0].ID
+
+	if out, err := runCmd(t, "decision", "accept", id[:12], "--evidence", "commit:9f2c1ab"); err != nil {
+		t.Fatalf("accept: %v\n%s", err, out)
+	}
+
+	for _, kind := range []types.EventKind{
+		types.EventDecisionAccepted, types.EventEvidenceAdded,
+	} {
+		evs, err := k.Decisions().Events(kernel.EventFilter{DecisionID: id, Kind: kind})
+		if err != nil || len(evs) != 1 {
+			t.Fatalf("%s events = %d (%v), want 1", kind, len(evs), err)
+		}
+		if evs[0].SessionID == "" {
+			t.Errorf("%s carries a NULL session_id — the governance action is unattributable", kind)
+		}
+		if evs[0].Agent != kernel.SessionAgentCLI {
+			t.Errorf("%s agent = %q, want %q so §D3 can exclude it from coverage denominators",
+				kind, evs[0].Agent, kernel.SessionAgentCLI)
+		}
+		// And the window it names exists.
+		started, err := k.Decisions().Events(kernel.EventFilter{
+			SessionID: evs[0].SessionID, Kind: types.EventSessionStarted,
+		})
+		if err != nil || len(started) != 1 {
+			t.Errorf("session %s has %d session.started rows (%v), want 1 — nothing to join to",
+				evs[0].SessionID, len(started), err)
+		}
+	}
+}

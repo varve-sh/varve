@@ -903,5 +903,6 @@ func (k *MemoryKernel) PromoteNote(noteID string, over PromoteOverrides) (*types
 	}
 	// Proposed, never born active: promotion goes through the ordinary
 	// lifecycle, which is the entire point.
+	k.governanceStamp()
 	return k.decisions.Propose(in)
 }
