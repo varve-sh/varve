@@ -223,3 +223,48 @@ func TestStatusCmd_HumanOutputAccountsForEveryRow(t *testing.T) {
 		t.Errorf("the status line does not account for its own total:\n%s", out)
 	}
 }
+
+// A2.3: `decision promote` is the sanctioned note→decision motion. Today's
+// answer without it is "retype it by hand", and a retype-in-place would be a
+// decision with no birth event and no quarantine.
+func TestDecisionPromoteCmd_ProposesFromTheNoteAndKeepsItLive(t *testing.T) {
+	k, _ := setupProject(t, types.MemorySaveInput{
+		Content:   "We only ever migrate forward.",
+		Type:      types.MemoryTypeFact,
+		Source:    types.MemorySourceUser,
+		FilePaths: []string{"internal/kernel/migrate.go"},
+	})
+	notes, err := k.List(types.ListOptions{Type: types.MemoryTypeNote, Limit: 10})
+	if err != nil || len(notes) != 1 {
+		t.Fatalf("expected one note, got %d (%v)", len(notes), err)
+	}
+	noteID := notes[0].ID
+
+	out, err := runCmd(t, "decision", "promote", noteID[:12])
+	if err != nil {
+		t.Fatalf("promote: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Proposed") {
+		t.Errorf("no confirmation printed:\n%s", out)
+	}
+
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	if len(ds) != 1 || ds[0].Status != types.StatusProposed {
+		t.Fatalf("decisions = %+v, want one proposed", ds)
+	}
+	if ds[0].SourceRef != "note:"+noteID {
+		t.Errorf("source_ref = %q, want the link back to the note", ds[0].SourceRef)
+	}
+	if n, err := k.Notes().Get(noteID); err != nil || n.Status != types.MemoryStatusActive {
+		t.Errorf("note status = %v (%v), want active while the promotion is pending", n.Status, err)
+	}
+
+	// promote → accept is one motion: the auto-attached import evidence means
+	// no --force is needed.
+	if out, err := runCmd(t, "decision", "accept", ds[0].ID[:12]); err != nil {
+		t.Fatalf("accept after promote must not need --force: %v\n%s", err, out)
+	}
+	if n, err := k.Notes().Get(noteID); err != nil || n.Status != types.MemoryStatusArchived {
+		t.Errorf("note status = %v (%v), want archived by the acceptance", n.Status, err)
+	}
+}

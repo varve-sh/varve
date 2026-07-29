@@ -137,3 +137,95 @@ func TestSession_BeginSessionAnnouncesImmediately(t *testing.T) {
 		t.Errorf("session.started = %d after a second ensure, want 1", got)
 	}
 }
+
+// --- A2.3: note → decision promotion ---
+
+func TestPromoteNote_CarriesTheNoteAndKeepsItLiveUntilAcceptance(t *testing.T) {
+	k := sessionKernel(t)
+	defer k.Close()
+
+	note, _, err := k.Save(types.MemorySaveInput{
+		Content:   "We only ever migrate forward; there are no down migrations.",
+		Type:      types.MemoryTypeFact,
+		Source:    types.MemorySourceUser,
+		FilePaths: []string{"internal/kernel/migrate.go"},
+		Tags:      []string{"schema"},
+		TopicKey:  "migrations",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := k.PromoteNote(note.ID, PromoteOverrides{})
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if d.Status != types.StatusProposed {
+		t.Errorf("status = %s, want proposed — promotion goes through the lifecycle", d.Status)
+	}
+	if d.SourceRef != "note:"+note.ID {
+		t.Errorf("source_ref = %q, want the durable link to the note", d.SourceRef)
+	}
+	if d.Body != note.Content || len(d.Scope) != 1 || d.Scope[0] != "internal/kernel/migrate.go" {
+		t.Errorf("the note did not carry over: %+v", d)
+	}
+	if len(d.Tags) != 1 || d.Tags[0] != "schema" {
+		t.Errorf("tags = %v, want the note's", d.Tags)
+	}
+	// The two namespaces are separate indexes, so the decision holds the key
+	// directly and the note keeps its own (F13, A2.3).
+	if d.TopicKey != "migrations" {
+		t.Errorf("topic_key = %q, want migrations", d.TopicKey)
+	}
+	// Auto-attached import evidence, so promote→accept needs no --force.
+	ev, err := k.Decisions().Evidence(d.ID)
+	if err != nil || len(ev) != 1 || ev[0].Kind != types.EvidenceKindImport {
+		t.Fatalf("evidence = %+v (%v), want one import row", ev, err)
+	}
+
+	// The note stays live while the promotion is only proposed: an archived
+	// note stops surfacing, and a proposal does not pack.
+	still, err := k.Notes().Get(note.ID)
+	if err != nil || still.Status != types.MemoryStatusActive {
+		t.Fatalf("note status = %v (%v), want active while proposed", still.Status, err)
+	}
+
+	if _, err := k.Decisions().Accept(d.ID, AcceptOptions{Actor: types.ActorHuman}); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	archived, err := k.Notes().Get(note.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.Status != types.MemoryStatusArchived {
+		t.Errorf("note status = %s after acceptance, want archived", archived.Status)
+	}
+}
+
+// A rejected promotion leaves the note untouched — no retrieval gap.
+func TestPromoteNote_RejectionLeavesTheNoteAlone(t *testing.T) {
+	k := sessionKernel(t)
+	defer k.Close()
+
+	note, _, err := k.Save(types.MemorySaveInput{
+		Content: "Prefer table-driven tests.", Type: types.MemoryTypeFact,
+		Source: types.MemorySourceUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := k.PromoteNote(note.ID, PromoteOverrides{Kind: types.DecisionKindConvention})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Kind != types.DecisionKindConvention {
+		t.Errorf("kind = %s, want convention", d.Kind)
+	}
+	if err := k.Decisions().Reject(d.ID, "not a rule"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := k.Notes().Get(note.ID)
+	if err != nil || got.Status != types.MemoryStatusActive {
+		t.Errorf("note status = %v (%v), want active", got.Status, err)
+	}
+}

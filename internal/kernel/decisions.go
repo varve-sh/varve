@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/memtrace-dev/memtrace/internal/scope"
@@ -319,6 +320,10 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 	return d, nil
 }
 
+// promotedNotePrefix marks a decision born from a note (A2.3). It is carried
+// on source_ref, which is the durable link between the two rows.
+const promotedNotePrefix = "note:"
+
 // AcceptOptions controls a proposed→active transition.
 type AcceptOptions struct {
 	// Force bypasses the evidence requirement. The bypass is recorded in the
@@ -458,6 +463,20 @@ func (s *DecisionStore) acceptTx(tx *sql.Tx, d *types.Decision, opts AcceptOptio
 			Payload:    map[string]any{"successor_id": d.ID},
 		}); err != nil {
 			return err
+		}
+	}
+
+	// A2.3: a promoted note is archived *in the acceptance transaction*, not at
+	// promotion time. While the promotion sits proposed the note stays active,
+	// so nothing stops surfacing for the days or weeks a proposal may wait; a
+	// proposal never packs, so there is no duplication window either. A
+	// rejected promotion leaves the note untouched. The decision's source_ref
+	// is the durable link — notes have no event log and need none here.
+	if noteID, ok := strings.CutPrefix(d.SourceRef, promotedNotePrefix); ok && noteID != "" {
+		if _, err := tx.Exec(
+			`UPDATE notes SET status = 'archived', updated_at = ? WHERE id = ? AND status <> 'archived'`,
+			fmtTime(now), noteID); err != nil {
+			return fmt.Errorf("archiving promoted note %s: %w", noteID, err)
 		}
 	}
 

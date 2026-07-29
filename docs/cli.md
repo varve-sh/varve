@@ -13,6 +13,7 @@ memtrace export  [--output memories.json] [--format json|markdown] [--type decis
 memtrace decision pending
 memtrace decision accept <id|prefix> [--evidence commit:<sha>] [--force]
 memtrace decision reject <id|prefix> [--reason "..."]
+memtrace decision promote <note-id|prefix> [--title "..."] [--kind convention] [--scope "src/**"]
 memtrace import  <file|url> [--format json|markdown] [--type decision] [--dry-run]
 memtrace browse
 memtrace serve   [--dir <path>]
@@ -118,6 +119,12 @@ memtrace decision accept 01KMDX71NT --evidence commit:9f2c1ab
 memtrace decision accept 01KMDX71NT --force                 # no evidence; recorded in the audit trail
 memtrace decision reject 01KMDX71NT --reason "duplicate"
 ```
+
+`memtrace decision promote` turns a note into a proposed decision, through the
+ordinary lifecycle, so it is born with provenance and a quarantine rather than
+by retyping a column. The note stays live while the promotion is pending and is
+archived when the decision is accepted; rejecting the promotion leaves the note
+untouched.
 
 Acceptance requires at least one evidence row unless `--force` is passed, and a
 forced acceptance is recorded as `"forced": true` on the `decision.accepted`

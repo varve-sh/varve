@@ -25,7 +25,8 @@ func newDecisionCmd() *cobra.Command {
 		Long: "Decisions saved by an agent, an importer or the v1 migration land " +
 			"`proposed`: they neither bind nor pack until a human accepts them.",
 	}
-	cmd.AddCommand(newDecisionPendingCmd(), newDecisionAcceptCmd(), newDecisionRejectCmd())
+	cmd.AddCommand(newDecisionPendingCmd(), newDecisionAcceptCmd(), newDecisionRejectCmd(),
+		newDecisionPromoteCmd())
 	return cmd
 }
 
@@ -163,6 +164,58 @@ func newDecisionRejectCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "Why the proposal was declined (recorded in the event)")
+	return cmd
+}
+
+// newDecisionPromoteCmd implements ADR-0001 Amendment 2, A2.3.
+func newDecisionPromoteCmd() *cobra.Command {
+	var title, kind, scope string
+	cmd := &cobra.Command{
+		Use:   "promote <note-id|prefix>",
+		Short: "Turn a note into a proposed decision",
+		Long: "\"I wrote this as a note and now realise it is a decision\" — promotion " +
+			"creates a proposed decision from the note, through the ordinary lifecycle, " +
+			"so it is born with provenance and a quarantine. The note stays live while " +
+			"the promotion is pending and is archived when the decision is accepted; " +
+			"rejecting the promotion leaves the note untouched. CLI and TUI only.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, _, err := openKernel()
+			if err != nil {
+				return err
+			}
+			defer k.Close()
+
+			id := resolveID(k, args[0])
+			if id == "" {
+				return fmt.Errorf("note %s not found", args[0])
+			}
+
+			over := kernel.PromoteOverrides{Title: title, Kind: types.DecisionKind(kind)}
+			if cmd.Flags().Changed("scope") {
+				over.Scope = []string{}
+				for _, g := range strings.Split(scope, ",") {
+					if g = strings.TrimSpace(g); g != "" {
+						over.Scope = append(over.Scope, g)
+					}
+				}
+			}
+
+			d, err := k.PromoteNote(id, over)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Proposed %s (%s): %s\n", d.ID, d.Kind, d.Title)
+			color.New(color.Faint).Printf(
+				"  the note stays live until you run 'memtrace decision accept %s'\n",
+				shortID(d.ID))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&title, "title", "", "Override the title (default: the note's summary)")
+	cmd.Flags().StringVar(&kind, "kind", "", "decision or convention (default: decision)")
+	cmd.Flags().StringVar(&scope, "scope", "",
+		"Comma-separated file globs (default: the note's file paths, verbatim)")
 	return cmd
 }
 

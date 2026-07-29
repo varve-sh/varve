@@ -804,3 +804,90 @@ func (k *MemoryKernel) saveDecision(input types.MemorySaveInput) (*types.Memory,
 	// so this path never reports an upsert.
 	return mem, false, nil
 }
+
+// PromoteOverrides lets the caller override fields derived from the note when
+// promoting it (A2.3). Everything else is EditProposed's job afterwards.
+type PromoteOverrides struct {
+	Title string
+	Kind  types.DecisionKind
+	Scope []string
+}
+
+// PromoteNote creates a `proposed` decision from a note (ADR-0001 Amendment 2,
+// A2.3). CLI and TUI only — the human-confirmation channel; an agent that
+// wants a note promoted proposes a decision citing it.
+//
+// "I wrote this as a note and now realise it is a decision" is a natural
+// motion, and the sanctioned answer is not a retype: a decision born by
+// column-flip would have no decision.proposed event, no provenance and no
+// quarantine, and an agent-reachable retype would be a quarantine bypass (D1,
+// rejected alternative (i)).
+//
+// The note stays `active` while the promotion is proposed and is archived by
+// the acceptance transaction; a rejected promotion leaves it untouched.
+func (k *MemoryKernel) PromoteNote(noteID string, over PromoteOverrides) (*types.Decision, error) {
+	n, err := k.notes.Get(noteID)
+	if err != nil {
+		return nil, err
+	}
+	if n.Status == types.MemoryStatusArchived {
+		return nil, &types.ValidationError{
+			Field:   "note",
+			Message: "an archived note has nothing to promote — reactivate it first",
+		}
+	}
+
+	title := over.Title
+	if title == "" {
+		title = n.Summary
+	}
+	if title == "" {
+		title = truncate(n.Content, 120)
+	}
+	if i := strings.IndexAny(title, "\r\n"); i >= 0 {
+		title = strings.TrimSpace(title[:i])
+	}
+	if r := []rune(title); len(r) > 200 {
+		title = string(r[:200])
+	}
+	if title == "" {
+		return nil, &types.ValidationError{
+			Field: "title", Message: "the note is empty — nothing to promote",
+		}
+	}
+
+	kind := over.Kind
+	if kind == "" {
+		kind = types.DecisionKindDecision
+	}
+	scope := over.Scope
+	if scope == nil {
+		// Verbatim, as in §D9's migration: an exact path is a glob that matches
+		// exactly itself.
+		scope = n.FilePaths
+	}
+
+	in := DecisionInput{
+		ProjectID:  k.projectID,
+		Kind:       kind,
+		Title:      title,
+		Body:       n.Content,
+		Scope:      scope,
+		Confidence: n.Confidence,
+		Source:     types.DecisionSourceUser,
+		SourceRef:  promotedNotePrefix + n.ID,
+		TopicKey:   n.TopicKey,
+		Tags:       n.Tags,
+		Via:        "cli",
+		// Attached at promotion so promote→accept is one motion and needs no
+		// --force. The linter may still flag it as weak evidence.
+		Evidence: []EvidenceInput{{
+			Kind:    types.EvidenceKindImport,
+			Ref:     promotedNotePrefix + n.ID,
+			AddedBy: types.ActorHuman,
+		}},
+	}
+	// Proposed, never born active: promotion goes through the ordinary
+	// lifecycle, which is the entire point.
+	return k.decisions.Propose(in)
+}
