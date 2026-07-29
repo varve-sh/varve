@@ -21,7 +21,11 @@ memtrace browse
 memtrace serve   [--dir <path>]
 memtrace status  [--json]
 memtrace reindex
-memtrace scan
+memtrace scan    [--backfill] [--limit 500] [--stale]
+memtrace observe [--commit HEAD] [--quiet]
+memtrace hooks   install
+memtrace report  [--days 30] [--format text|md|json] [--decision <id>] [--raw] [--grace 60]
+memtrace report  coverage [--days 30]
 memtrace migrate --from-v1
 memtrace doctor
 memtrace config  get
@@ -262,6 +266,52 @@ Backfills embeddings for memories saved before an embedder was configured.
 ```bash
 memtrace reindex
 ```
+
+---
+
+## `memtrace report`
+
+What the agents did with your decisions. Every figure comes from the
+append-only event log and drills down to the rows behind it.
+
+```bash
+memtrace report                         # last 30 days
+memtrace report --days 7 --format md    # forwardable
+memtrace report --decision 01KMDX71NT --raw   # the raw events behind the numbers
+memtrace report coverage                # the kill-criterion metric
+```
+
+The report prints its own method and its own limits, on the report, every
+time: the grace window used, that reverts are detected from git trailers only,
+and that **conform means no deterministic violation signal was detected — not
+verified compliance**. Attribution shows the recorded chain on individual
+cases; it does not establish what would have happened without the decision.
+
+Rates always carry their sample size, and a rate over fewer than five cases is
+shown as a raw fraction rather than a percentage.
+
+---
+
+## `memtrace scan`, `memtrace observe`, `memtrace hooks install`
+
+How commits get attributed to decisions.
+
+```bash
+memtrace hooks install      # post-commit hook; `memtrace init` does this for you
+memtrace scan               # observe commits the hook missed
+memtrace scan --backfill    # also observe commits older than this store
+memtrace scan --stale       # the note-staleness scan (unrelated)
+```
+
+The hook runs `memtrace observe` in the background. It cannot block a commit,
+cannot fail one, and prints nothing; if it misses a commit — because another
+process held the database, or because it was never installed — `memtrace scan`
+picks it up, and the scan also runs automatically when an agent session starts.
+
+Commits older than the store are skipped unless you ask for them, and anything
+`--backfill` produces is marked and excluded from every reported metric: a
+verdict about a commit that predates your decisions is archaeology, not
+attribution.
 
 ---
 
