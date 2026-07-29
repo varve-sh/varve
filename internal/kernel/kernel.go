@@ -881,11 +881,21 @@ func (k *MemoryKernel) saveDecision(input types.MemorySaveInput) (*types.Memory,
 		}
 	}
 
+	// When the title *is* the content — a short save with no explicit summary —
+	// the body would only restate it, and the projection already falls back to
+	// the title for an empty body (`CASE WHEN body = '' THEN title`). Storing
+	// the duplicate made every such decision cost twice its size in a budgeted
+	// pack (F37).
+	body := input.Content
+	if strings.TrimSpace(body) == strings.TrimSpace(title) {
+		body = ""
+	}
+
 	in := DecisionInput{
 		ProjectID:  k.projectID,
 		Kind:       types.DecisionKind(input.Type),
 		Title:      title,
-		Body:       input.Content,
+		Body:       body,
 		Scope:      input.FilePaths,
 		Confidence: input.Confidence,
 		Source:     types.DecisionSource(input.Source),

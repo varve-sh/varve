@@ -59,10 +59,19 @@ func renderItem(rc renderContext, c *candidate, candIdx int) renderedItem {
 	var full strings.Builder
 	full.WriteString(head)
 	full.WriteString("\n")
-	full.WriteString(d.Title)
-	if body := strings.TrimRight(d.Body, "\n"); body != "" {
-		full.WriteString("\n")
+	body := strings.TrimRight(d.Body, "\n")
+	if restatesTitle(d.Title, body) {
+		// The body already opens with the title, so printing both spends the
+		// budget twice on the same sentence (F37). Every decision saved without
+		// an explicit summary is in this shape: kernel.saveDecision derives the
+		// title from the content and keeps the content as the body.
 		full.WriteString(body)
+	} else {
+		full.WriteString(d.Title)
+		if body != "" {
+			full.WriteString("\n")
+			full.WriteString(body)
+		}
 	}
 	if ev := evidenceLine(rc, d.ID); ev != "" {
 		full.WriteString("\n")
@@ -143,6 +152,25 @@ func renderNote(n *types.Note) string {
 }
 
 func utf8Start(b byte) bool { return b&0xC0 != 0x80 }
+
+// restatesTitle reports whether the body already begins with the title, so
+// rendering both would emit the same sentence twice.
+//
+// A derived title is `truncate(content, 120)`, which appends an ellipsis when
+// it cuts — so the comparison is against the title's text, ellipsis removed.
+// The title line is the one that goes: the body is a superset of it, and §P8's
+// item shape is a header followed by the decision's text.
+func restatesTitle(title, body string) bool {
+	if body == "" {
+		return false
+	}
+	core := strings.TrimSuffix(strings.TrimSpace(title), "...")
+	core = strings.TrimSuffix(core, "…")
+	if core == "" {
+		return false
+	}
+	return strings.HasPrefix(body, core)
+}
 
 // manifestCap is the share of the budget the envelope may spend on echoing the
 // caller's own input back to it.

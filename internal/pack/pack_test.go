@@ -3,6 +3,7 @@ package pack
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -699,18 +700,57 @@ func TestBuild_ProposalCountIsTheTrueMatchCountNotWhatFits(t *testing.T) {
 	}
 }
 
-// A pending disposal request is advisory and changes nothing: the decision is
-// still binding and still fully packable (ADR-0001 A3.1). §P8 has no marker
-// for it, and inventing one would be an ADR-0002 decision.
-func TestBuild_DisposalRequestsDoNotAffectPacking(t *testing.T) {
-	src := &fakeSource{decisions: []types.Decision{
-		decision("01REQUESTED", "Sessions are server-side only", withScope("internal/**")),
-	}}
-	res := build(t, src, Request{FilePaths: []string{"internal/auth/session.go"}})
-	if res.ItemCount != 1 {
-		t.Fatalf("served %d items, want the decision", res.ItemCount)
+// A3.1 makes a pending disposal request advisory: the decision is still
+// binding, still packable, and §P8 defines no marker for it. The guarantee is
+// *structural* — the packer has no way to learn about a request, because
+// `Source` exposes none — so that is what this asserts. The previous version
+// pinned the absence of the word "disposal" in the output, which a fakeSource
+// that cannot express a request could only fail if someone hardcoded it (F38).
+func TestBuild_HasNoAccessToDisposalRequests(t *testing.T) {
+	src := reflect.TypeOf((*Source)(nil)).Elem()
+	for i := 0; i < src.NumMethod(); i++ {
+		name := strings.ToLower(src.Method(i).Name)
+		if strings.Contains(name, "disposal") || strings.Contains(name, "purge") {
+			t.Errorf("Source exposes %s: a pending disposal request is advisory and "+
+				"must not be able to influence packing (A3.1). If §P8 should mark it, "+
+				"that is an ADR-0002 amendment, not an implementer default",
+				src.Method(i).Name)
+		}
 	}
-	if strings.Contains(strings.ToLower(res.Text), "disposal") {
-		t.Errorf("the pack invented a disposal marker §P8 does not define:\n%s", res.Text)
+	// And the events the packer never reads are not reachable another way: the
+	// interface is the whole of its view of the store.
+	if src.NumMethod() != 8 {
+		t.Errorf("Source has %d methods; if the packer's view of the store grew, "+
+			"say what the new one may and may not tell it", src.NumMethod())
+	}
+}
+
+func TestBuild_DoesNotRenderTheTitleTwice(t *testing.T) {
+	short := decision("01SHORT", "Handlers validate input at the boundary.",
+		withScope("internal/**"))
+	short.Body = "Handlers validate input at the boundary."
+
+	long := decision("01LONG", "A rule whose statement runs past the title cutoff and is...",
+		withScope("internal/**"))
+	long.Body = "A rule whose statement runs past the title cutoff and is therefore " +
+		"truncated with an ellipsis when the title is derived from it."
+
+	distinct := decision("01BOTH", "Tokens rotate on every use", withScope("internal/**"))
+	distinct.Body = "Reuse detection revokes the family."
+
+	src := &fakeSource{decisions: []types.Decision{short, long, distinct}}
+	res := build(t, src, Request{FilePaths: []string{"internal/auth/x.go"}, BudgetTokens: 20000})
+
+	if n := strings.Count(res.Text, "Handlers validate input at the boundary."); n != 1 {
+		t.Errorf("the title is rendered %d times, want 1:\n%s", n, res.Text)
+	}
+	if n := strings.Count(res.Text, "A rule whose statement runs past the title cutoff"); n != 1 {
+		t.Errorf("a truncated title is rendered %d times, want 1:\n%s", n, res.Text)
+	}
+	// A genuinely distinct body still gets both lines: this is a duplication
+	// fix, not a body suppressor.
+	if !strings.Contains(res.Text, "Tokens rotate on every use") ||
+		!strings.Contains(res.Text, "Reuse detection revokes the family.") {
+		t.Errorf("a distinct title and body must both render:\n%s", res.Text)
 	}
 }
