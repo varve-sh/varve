@@ -131,7 +131,8 @@ func selectItems(rc renderContext, cands []*candidate, req Request, proposedIDs 
 
 	// The reserve is a true upper bound on the envelope: the manifest rendered
 	// with the largest numbers it could carry, plus §P4's footer floor.
-	worstManifest := manifest(req, req.BudgetTokens, len(cands), len(cands), len(cands), len(cands))
+	worstManifest := manifest(req, manifestCap(req.BudgetTokens), req.BudgetTokens,
+		len(cands), len(cands), len(cands), len(cands))
 	reserve := Estimate(worstManifest) + footerReserve
 	remaining := req.BudgetTokens - reserve
 
@@ -244,7 +245,8 @@ func assemble(req Request, blocks []string, sel selection, proposedIDs []string,
 	used := 0
 	var text string
 	for i := 0; i < 5; i++ {
-		head := manifest(req, used, len(sel.served), decisions, notes, len(sel.omitted))
+		head := manifest(req, manifestCap(req.BudgetTokens), used,
+			len(sel.served), decisions, notes, len(sel.omitted))
 		parts := []string{head, body}
 		if len(footer) > 0 {
 			parts = append(parts, strings.Join(footer, "\n"))

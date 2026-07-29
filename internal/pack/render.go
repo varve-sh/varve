@@ -144,23 +144,115 @@ func renderNote(n *types.Note) string {
 
 func utf8Start(b byte) bool { return b&0xC0 != 0x80 }
 
-// manifest is §P8's three-line header. `used` is the estimate of the whole
-// emitted text, which includes the manifest itself — resolved by fixpoint in
-// assemble, not by guessing.
-func manifest(req Request, used, items, decisions, notes, omitted int) string {
-	var b strings.Builder
-	b.WriteString(packHeader)
-	b.WriteString("\n")
-	if len(req.FilePaths) > 0 {
-		b.WriteString("files: " + strings.Join(req.FilePaths, ", ") + "\n")
-	}
-	if req.Task != "" {
-		b.WriteString("task: " + singleLine(req.Task) + "\n")
-	}
-	fmt.Fprintf(&b, "budget: %d est-tokens (%s) · used: %d · items: %d (%s, %s) · omitted: %d",
+// manifestCap is the share of the budget the envelope may spend on echoing the
+// caller's own input back to it.
+//
+// §P4 puts the manifest inside the reserve and assumes it is small. It is not,
+// necessarily: §P1 accepts a 2,000-character task and an unbounded
+// `file_paths` list, and echoing those verbatim breached the budget by up to
+// 4.2× on legal inputs (F36) — worst at the 500 floor, which is exactly the
+// budget an agent sets when its window is tight.
+//
+// A third is chosen so the envelope can never crowd out the items the pack
+// exists to deliver: at the 500 floor that is 166 estimated tokens, against
+// ~40 for the fixed lines and §P4's own ~90 for the top decision's stub.
+const manifestCapFraction = 3
+
+func manifestCap(budget int) int { return budget / manifestCapFraction }
+
+// manifest is §P8's three-line header, rendered to fit inside cap.
+//
+// `used` is the estimate of the whole emitted text, which includes the
+// manifest itself — resolved by fixpoint in assemble, not by guessing.
+//
+// Elision follows §P8's own footer rule — drop the *content*, keep the
+// *counts* — rather than a new invention: the file list degrades to the paths
+// that fit plus `+N more`, and the task truncates with an ellipsis. Both are
+// the caller's own input, which it already has; the manifest's job is to say
+// what this pack is and what it cost, and that part is never dropped.
+func manifest(req Request, cap, used, items, decisions, notes, omitted int) string {
+	head := packHeader + "\n"
+	tail := fmt.Sprintf(
+		"budget: %d est-tokens (%s) · used: %d · items: %d (%s, %s) · omitted: %d",
 		req.BudgetTokens, EstimatorVersion, used, items,
 		plural(decisions, "decision"), plural(notes, "note"), omitted)
-	return b.String()
+
+	// The fixed lines are never dropped: a pack that does not say what it is
+	// and what it cost is worse than one that overshoots.
+	remaining := cap - Estimate(head+tail)
+
+	files := filesLine(req.FilePaths, &remaining)
+	task := taskLine(req.Task, &remaining)
+	return head + files + task + tail
+}
+
+// filesLine renders `files:` within the space left, keeping the count honest.
+func filesLine(paths []string, remaining *int) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	shown := make([]string, 0, len(paths))
+	for i, p := range paths {
+		candidate := renderFilesLine(append(shown, p), len(paths))
+		if Estimate(candidate) > *remaining && i > 0 {
+			break
+		}
+		shown = append(shown, p)
+	}
+	line := renderFilesLine(shown, len(paths))
+	if Estimate(line) > *remaining && len(shown) > 0 {
+		// Even one path does not fit: keep the count, drop the names.
+		line = fmt.Sprintf("files: %d file(s)\n", len(paths))
+	}
+	*remaining -= Estimate(line)
+	return line
+}
+
+func renderFilesLine(shown []string, total int) string {
+	line := "files: " + strings.Join(shown, ", ")
+	if len(shown) < total {
+		line += fmt.Sprintf(", +%d more", total-len(shown))
+	}
+	return line + "\n"
+}
+
+// taskLine renders `task:` within the space left. The task is the caller's own
+// prose — the thing it least needs read back to it — so it is the first thing
+// truncated and the first thing dropped entirely.
+func taskLine(task string, remaining *int) string {
+	task = singleLine(task)
+	if task == "" || *remaining <= 0 {
+		return ""
+	}
+	line := "task: " + task + "\n"
+	if Estimate(line) <= *remaining {
+		*remaining -= Estimate(line)
+		return line
+	}
+	// Budget the body of the line in bytes, since that is what the estimator
+	// counts. §P1's 2,000-*character* input cap is not a byte cap — 2,000 CJK
+	// runes are 6,000 bytes — which is why capping the echo is the fix rather
+	// than narrowing what the tool accepts.
+	avail := (*remaining * bytesPerToken) - len("task: …\n")
+	if avail <= 0 {
+		return ""
+	}
+	cut := avail
+	if cut > len(task) {
+		cut = len(task)
+	}
+	for cut > 0 && !utf8Start(task[cut-1]) {
+		cut-- // never split a rune: the output must stay valid UTF-8
+	}
+	for cut > 0 && !utf8Start(task[cut]) {
+		cut--
+	}
+	if cut <= 0 {
+		return ""
+	}
+	line = "task: " + strings.TrimRight(task[:cut], " ") + "…\n"
+	*remaining -= Estimate(line)
+	return line
 }
 
 // plural keeps §P8's example wording exact ("3 decisions, 1 note"). The format

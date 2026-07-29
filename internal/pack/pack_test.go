@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/memtrace-dev/memtrace/internal/retrieval"
 	"github.com/memtrace-dev/memtrace/internal/types"
@@ -336,24 +337,103 @@ func TestBuild_BudgetIsNeverExceeded(t *testing.T) {
 			strings.Repeat("note body ", 50), "internal/auth/x.go"))
 	}
 	src := &fakeSource{decisions: decisions, notes: notes}
+	for i := 0; i < 20; i++ {
+		src.proposed = append(src.proposed, decision(
+			fmt.Sprintf("01PROP%020d", i), fmt.Sprintf("Proposal %d", i),
+			withScope("internal/**"), func(d *types.Decision) { d.Status = types.StatusProposed }))
+	}
 
-	for _, budget := range []int{500, 750, 1000, 2000, 5000, 20000} {
-		res := build(t, src, Request{
-			FilePaths: []string{"internal/auth/x.go"}, BudgetTokens: budget,
-		})
-		if got := Estimate(res.Text); got > budget {
-			t.Errorf("budget %d: emitted %d est-tokens — the budget is a ceiling, "+
-				"and this is falsifier 1 firing", budget, got)
+	// The envelope is part of the ceiling (§P1, §P4: "envelope included"), and
+	// it is the half a minimal fixture cannot reach. These are the inputs the
+	// tool's own schema accepts at their limits: §P1's 2,000-character task,
+	// a long file list, and — sharpest — a task of 2,000 CJK *runes*, which is
+	// 6,000 bytes against an estimator that counts bytes (F36).
+	// Every envelope keeps the note-matching path, so the candidate set is the
+	// same 60 rows in each case and the counts below compare like with like.
+	longPaths := []string{"internal/auth/x.go"}
+	for i := 0; i < 25; i++ {
+		longPaths = append(longPaths,
+			fmt.Sprintf("internal/some/deeply/nested/package%02d/implementation_file.go", i))
+	}
+	envelopes := []struct {
+		name string
+		req  Request
+	}{
+		{"minimal", Request{FilePaths: []string{"internal/auth/x.go"}}},
+		{"max task", Request{
+			FilePaths: []string{"internal/auth/x.go"},
+			Task:      strings.Repeat("a", 2000),
+		}},
+		{"many paths", Request{FilePaths: longPaths}},
+		{"both", Request{FilePaths: longPaths, Task: strings.Repeat("a", 2000)}},
+		{"CJK task at the rune cap", Request{
+			FilePaths: []string{"internal/auth/x.go"},
+			Task:      strings.Repeat("決", 2000),
+		}},
+		{"CJK task and many paths", Request{
+			FilePaths: longPaths, Task: strings.Repeat("決", 2000),
+		}},
+	}
+
+	for _, env := range envelopes {
+		for _, budget := range []int{500, 750, 1000, 2000, 5000, 20000} {
+			req := env.req
+			req.BudgetTokens = budget
+			res := build(t, src, req)
+
+			if got := Estimate(res.Text); got > budget {
+				t.Errorf("%s @ budget %d: emitted %d est-tokens (%.1fx) — the budget is a "+
+					"ceiling, envelope included, and this is falsifier 1 firing",
+					env.name, budget, got, float64(got)/float64(budget))
+			}
+			if res.UsedTokens != Estimate(res.Text) {
+				t.Errorf("%s @ budget %d: used_tokens %d disagrees with the text it "+
+					"describes (%d)", env.name, budget, res.UsedTokens, Estimate(res.Text))
+			}
+			// Whatever the envelope costs, the pack still says what it is and
+			// what it cost — the manifest's fixed lines are never dropped.
+			if !strings.HasPrefix(res.Text, packHeader) ||
+				!strings.Contains(res.Text, "budget: ") {
+				t.Errorf("%s @ budget %d: the manifest lost its fixed lines:\n%s",
+					env.name, budget, res.Text)
+			}
+			// And the output stays valid UTF-8 even when the task is cut.
+			if !utf8.ValidString(res.Text) {
+				t.Errorf("%s @ budget %d: truncation split a rune", env.name, budget)
+			}
+			// Nothing is dropped silently: everything eligible is served or named.
+			if res.ItemCount+res.OmittedCount+res.DedupedCount != 60 {
+				t.Errorf("%s @ budget %d: %d served + %d omitted + %d deduped != 60 candidates",
+					env.name, budget, res.ItemCount, res.OmittedCount, res.DedupedCount)
+			}
+			// The proposal count is the true match count at every budget.
+			if res.ProposedMatched != 20 {
+				t.Errorf("%s @ budget %d: proposed_matched = %d, want 20",
+					env.name, budget, res.ProposedMatched)
+			}
 		}
-		if res.UsedTokens != Estimate(res.Text) {
-			t.Errorf("budget %d: used_tokens %d disagrees with the text it describes (%d)",
-				budget, res.UsedTokens, Estimate(res.Text))
-		}
-		// Nothing is dropped silently: everything eligible is served or named.
-		if res.ItemCount+res.OmittedCount+res.DedupedCount != 60 {
-			t.Errorf("budget %d: %d served + %d omitted + %d deduped != 60 candidates",
-				budget, res.ItemCount, res.OmittedCount, res.DedupedCount)
-		}
+	}
+}
+
+// The envelope may not crowd out the content either: at a workable budget a
+// maximal envelope still leaves room for the top decision.
+func TestBuild_EnvelopeDoesNotStarveTheTopDecision(t *testing.T) {
+	src := &fakeSource{decisions: []types.Decision{
+		decision("01TOP", "Handlers validate the auth header", withScope("internal/**")),
+	}}
+	paths := make([]string, 0, 26)
+	for i := 0; i < 26; i++ {
+		paths = append(paths,
+			fmt.Sprintf("internal/some/deeply/nested/package%02d/implementation_file.go", i))
+	}
+	res := build(t, src, Request{
+		FilePaths: paths, Task: strings.Repeat("決", 2000), BudgetTokens: 2000,
+	})
+	if res.ItemCount != 1 {
+		t.Errorf("the envelope starved the only decision: %d items\n%s", res.ItemCount, res.Text)
+	}
+	if got := Estimate(res.Text); got > 2000 {
+		t.Errorf("emitted %d est-tokens over a 2000 budget", got)
 	}
 }
 
