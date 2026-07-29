@@ -261,7 +261,7 @@ func TestSetupAgent_UnknownAgent(t *testing.T) {
 // rather than UX friction.
 func TestInstructionTemplates_DescribeObservableBehaviour(t *testing.T) {
 	for _, snippet := range []struct{ name, text string }{
-		{"CLAUDE.md", claudeMdSnippet},
+		{"CLAUDE.md snippet", claudeMdSnippet},
 		{"cursor rules", cursorRulesSnippet},
 		{"copilot", copilotInstructionsSnippet},
 		{"windsurf", windsurfRulesSnippet},
@@ -296,6 +296,53 @@ func TestInstructionTemplates_DescribeObservableBehaviour(t *testing.T) {
 			if strings.Contains(snippet.text, stale) {
 				t.Errorf("%s template still carries superseded copy: %q", snippet.name, stale)
 			}
+		}
+	}
+}
+
+// A2.4 names this repo's own CLAUDE.md as one of the templates ("this repo's
+// own CLAUDE.md is itself one of the stale templates"), and it is the
+// instruction set governing the founder's dogfooding — which is where
+// falsifier 1's data comes from. The generated snippet was pinned; the
+// hand-maintained file was not, and two of the pinned literals do not appear
+// in it verbatim because it is markdown (“ `note` “, “ **`proposed`** “).
+// So it could drift and no test would notice (F34).
+//
+// The assertions are markdown-tolerant: they strip the formatting characters
+// rather than demanding the plain-text spelling, because the file is meant to
+// be read by a human as well as an agent.
+func TestRepoClaudeMD_StatesTheSameNormativeContent(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("this repo's CLAUDE.md must exist and be readable: %v", err)
+	}
+	// Strip the characters markdown uses for emphasis and code spans, so
+	// **`proposed`** reads as proposed. Underscores are left alone: they are
+	// part of every tool name here (memory_pack), not formatting.
+	plain := strings.NewReplacer("`", "", "*", "").Replace(string(raw))
+
+	for _, want := range []struct{ claim, text string }{
+		{"a governed save lands proposed", "proposed"},
+		{"how a human makes it binding", "memtrace decision accept"},
+		{"fact/event are notes", "synonyms for note"},
+		{"forget records a request", "disposal request"},
+		{"forget changes nothing", "changes no status"},
+		{"who confirms while proposed", "memtrace decision reject"},
+		{"who confirms once binding", "memtrace decision revert"},
+		{"pack is the first call", "memory_pack"},
+	} {
+		if !strings.Contains(plain, want.text) {
+			t.Errorf("this repo's CLAUDE.md does not state %s (missing %q)",
+				want.claim, want.text)
+		}
+	}
+	for _, stale := range []string{
+		"forget/delete of a decision maps to reject",
+		"never packed into context",
+		"patch an existing memory by ID (content, tags, type, confidence)",
+	} {
+		if strings.Contains(plain, stale) {
+			t.Errorf("this repo's CLAUDE.md still carries superseded copy: %q", stale)
 		}
 	}
 }

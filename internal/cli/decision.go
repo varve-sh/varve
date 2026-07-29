@@ -158,7 +158,7 @@ func newDecisionAcceptCmd() *cobra.Command {
 				return err
 			}
 			if current.Status != types.StatusProposed {
-				return notProposedError(id, current.Status)
+				return notProposedError(id, current.Status, "accepted")
 			}
 
 			for i, in := range inputs {
@@ -185,7 +185,7 @@ func newDecisionAcceptCmd() *cobra.Command {
 			}
 			var illegal *types.IllegalTransitionError
 			if errors.As(err, &illegal) {
-				return notProposedError(id, illegal.From)
+				return notProposedError(id, illegal.From, "accepted")
 			}
 			if err != nil {
 				return err
@@ -241,7 +241,14 @@ func newDecisionRejectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := k.RejectDecision(id, reason); err != nil {
+			err = k.RejectDecision(id, reason)
+			var illegal *types.IllegalTransitionError
+			if errors.As(err, &illegal) {
+				// `accept` got a translation layer and `reject` did not; a raw
+				// transition error is the class the ADRs legislate against (F35).
+				return notProposedError(id, illegal.From, "declined")
+			}
+			if err != nil {
 				return err
 			}
 			fmt.Printf("Rejected %s\n", id)
@@ -271,6 +278,21 @@ func newDecisionRevertCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A proposal cannot be reverted — §D3 says proposed→reverted is
+			// illegal and to reject instead. Doing the rejection silently would
+			// perform an irreversible terminal action under a name the user did
+			// not type; F19 established the pattern for exactly this case, which
+			// is to refuse and say which command to run (F35).
+			current, err := k.Decisions().GetDecision(id)
+			if err != nil {
+				return err
+			}
+			if current.Status == types.StatusProposed {
+				return fmt.Errorf("decision %s is still a proposal, so there is nothing to "+
+					"repeal — decline it with `memtrace decision reject %s`, which is also "+
+					"terminal but is the transition §D3 defines for a proposal", id, shortID(id))
+			}
+
 			outcome, err := k.Forget(id, types.ActorHuman)
 			if err != nil {
 				return err
@@ -278,12 +300,8 @@ func newDecisionRevertCmd() *cobra.Command {
 			switch outcome {
 			case kernel.DisposalReverted:
 				fmt.Printf("Reverted %s — kept as a reverted audit record\n", id)
-			case kernel.DisposalRejected:
-				fmt.Printf("Rejected %s — it was still a proposal, so it is kept as a rejected audit record\n", id)
-			case kernel.DisposalDeleted:
-				fmt.Printf("Deleted %s — it had no history to keep\n", id)
 			default:
-				fmt.Printf("Decision %s is already terminal; nothing to revert\n", id)
+				fmt.Printf("Decision %s is already %s; nothing to revert\n", id, current.Status)
 			}
 			return nil
 		},
@@ -346,16 +364,24 @@ func newDecisionPromoteCmd() *cobra.Command {
 // notProposedError explains why a non-proposal cannot be accepted. Acceptance
 // is the proposed→active edge only: re-accepting is not idempotent-and-
 // harmless, it would re-promote evidence attached since (§D4, F19).
-func notProposedError(id string, status types.DecisionStatus) error {
-	switch status {
-	case types.StatusActive:
+func notProposedError(id string, status types.DecisionStatus, verb string) error {
+	if verb == "" {
+		verb = "accepted"
+	}
+	switch {
+	case status == types.StatusActive && verb == "accepted":
 		return fmt.Errorf("decision %s is already active; it can only be accepted once, "+
 			"and re-accepting would promote evidence attached since to accepting evidence", id)
-	case types.StatusViolated:
+	case status == types.StatusViolated && verb == "accepted":
 		return fmt.Errorf("decision %s is violated, and still binding; it returns to active "+
 			"when its violations are resolved, not by being accepted again", id)
+	case status.IsTerminal():
+		return fmt.Errorf("decision %s is %s, which is terminal — it cannot be %s. "+
+			"Re-adopting a rule means a new decision citing this one", id, status, verb)
 	default:
-		return fmt.Errorf("decision %s is %s — only a proposal can be accepted", id, status)
+		return fmt.Errorf("decision %s is %s, and only a proposal can be %s — "+
+			"repeal a binding decision with `memtrace decision revert %s`",
+			id, status, verb, shortID(id))
 	}
 }
 

@@ -533,3 +533,54 @@ func TestRmCmd_NamesTheTransitionItMade(t *testing.T) {
 		t.Errorf("status = %s, want rejected", d.Status)
 	}
 }
+
+// F35. `decision revert` on a proposal used to perform a *rejection* — an
+// irreversible terminal action under a name the user did not type. §D3 does say
+// proposed→reverted is illegal and to reject instead, but the pattern this
+// branch established for that case (F19) is to refuse and name the command,
+// not to silently substitute one.
+func TestDecisionRevertCmd_RefusesAProposalAndNamesTheRightCommand(t *testing.T) {
+	k, _ := proposedProject(t)
+	ds, _ := k.Decisions().ListDecisions(kernel.DecisionFilter{})
+	id := ds[0].ID
+
+	_, err := runCmd(t, "decision", "revert", id[:12])
+	if err == nil {
+		t.Fatal("reverting a proposal must refuse rather than reject it")
+	}
+	if !strings.Contains(err.Error(), "decision reject") {
+		t.Errorf("the refusal must name the command that does apply: %v", err)
+	}
+	if d, _ := k.Decisions().GetDecision(id); d.Status != types.StatusProposed {
+		t.Errorf("status = %s, want proposed — nothing should have happened", d.Status)
+	}
+}
+
+// The other half: `reject` on a row that is not a proposal leaked the raw
+// transition error, where `accept` had a translation layer.
+func TestDecisionRejectCmd_TranslatesTheTransitionError(t *testing.T) {
+	k, _ := proposedProject(t)
+	// A binding decision, repealed: `rejected` is not a legal destination from
+	// `reverted`, and §D3 says so.
+	binding, _, err := k.Save(types.MemorySaveInput{
+		Content: "Sessions are server-side only.", Type: types.MemoryTypeDecision,
+		Source: types.MemorySourceUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Forget(binding.ID, types.ActorHuman); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = runCmd(t, "decision", "reject", binding.ID[:12])
+	if err == nil {
+		t.Fatal("rejecting a reverted decision must fail")
+	}
+	if strings.Contains(err.Error(), "illegal decision status transition") {
+		t.Errorf("the raw transition error reached the user: %v", err)
+	}
+	if !strings.Contains(err.Error(), "terminal") {
+		t.Errorf("the message must say why: %v", err)
+	}
+}
