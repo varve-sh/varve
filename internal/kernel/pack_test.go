@@ -336,3 +336,98 @@ func TestPack_LatencyEnvelope(t *testing.T) {
 		t.Errorf("p95 = %v, over §P13's 150 ms envelope — falsifier 5", p95)
 	}
 }
+
+// F31. The zero-event hard delete sat above both the channel check and the
+// terminal check, and "no history to protect" is false for exactly the
+// population §D9 creates deliberately: §D7's migration exception writes one
+// migration.completed row and no per-decision events, so after a migration
+// every decision has zero events. An agent could destroy any of them, with no
+// transition, no request, nothing in the triage queue, and no FK backstop —
+// there are no events to reference.
+func TestForget_AMigratedDecisionIsNotAgentDeletable(t *testing.T) {
+	k := packKernel(t)
+
+	// A decision exactly as migrate_v1 writes one: inserted directly, no events.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	id := "01MIGRATEDDECISION00000000"
+	if _, err := k.Decisions().DB().Exec(`
+		INSERT INTO decisions (id, project_id, kind, title, body, status, scope, confidence,
+		    source, tags, supersedes, created_at, updated_at, decided_at, status_changed_at,
+		    access_count)
+		VALUES (?, ?, 'decision', 'Sessions are server-side only', '', 'active', '[]', 1.0,
+		    'import', '[]', '[]', ?, ?, ?, ?, 0)`,
+		id, testProject, now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if evs, _ := k.Decisions().Events(EventFilter{DecisionID: id}); len(evs) != 0 {
+		t.Fatalf("fixture has %d events; the point is that it has none", len(evs))
+	}
+
+	outcome, err := k.Forget(id, types.ActorAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome == DisposalDeleted {
+		t.Fatal("an agent hard-deleted a migrated decision")
+	}
+	if outcome != DisposalRequested {
+		t.Errorf("outcome = %v, want a recorded disposal request", outcome)
+	}
+	got, err := k.Decisions().GetDecision(id)
+	if err != nil {
+		t.Fatalf("the row must survive: %v", err)
+	}
+	if got.Status != types.StatusActive {
+		t.Errorf("status = %s, want active — an agent may not dispose of it", got.Status)
+	}
+	reqs, _ := k.Decisions().Events(EventFilter{
+		DecisionID: id, Kind: types.EventDecisionDisposalRequested,
+	})
+	if len(reqs) != 1 {
+		t.Errorf("disposal requests = %d, want 1", len(reqs))
+	}
+	// And it is visible to the human who has to rule on it.
+	pending, _ := k.Decisions().PendingDisposals(testProject)
+	if len(pending) != 1 || pending[0].Decision.ID != id {
+		t.Errorf("the request is not in the triage queue: %+v", pending)
+	}
+}
+
+// The human channel transitions it instead of destroying it: `decision revert`
+// promises "kept as a reverted audit record", and that has to be true for a
+// migrated row too.
+func TestForget_AMigratedDecisionRevertsRatherThanVanishing(t *testing.T) {
+	k := packKernel(t)
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	id := "01MIGRATEDDECISION00000001"
+	if _, err := k.Decisions().DB().Exec(`
+		INSERT INTO decisions (id, project_id, kind, title, body, status, scope, confidence,
+		    source, tags, supersedes, created_at, updated_at, decided_at, status_changed_at,
+		    access_count)
+		VALUES (?, ?, 'decision', 'Sessions are server-side only', '', 'active', '[]', 1.0,
+		    'import', '[]', '[]', ?, ?, ?, ?, 0)`,
+		id, testProject, now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := k.Forget(id, types.ActorHuman)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != DisposalReverted {
+		t.Fatalf("outcome = %v, want DisposalReverted", outcome)
+	}
+	got, err := k.Decisions().GetDecision(id)
+	if err != nil {
+		t.Fatalf("the audit record must survive: %v", err)
+	}
+	if got.Status != types.StatusReverted {
+		t.Errorf("status = %s, want reverted", got.Status)
+	}
+	if evs, _ := k.Decisions().Events(EventFilter{
+		DecisionID: id, Kind: types.EventDecisionReverted,
+	}); len(evs) != 1 {
+		t.Errorf("decision.reverted events = %d, want 1", len(evs))
+	}
+}

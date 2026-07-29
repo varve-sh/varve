@@ -296,7 +296,9 @@ type DisposalOutcome int
 const (
 	// DisposalNothing: no such row, or a decision already terminal.
 	DisposalNothing DisposalOutcome = iota
-	// DisposalDeleted: a note, or an event-free decision, was hard-deleted.
+	// DisposalDeleted: a note was hard-deleted. Decisions are never hard-deleted
+	// through this path — they carry an audit record whether or not they carry
+	// events (F31).
 	DisposalDeleted
 	// DisposalRejected: proposed → rejected (human channel).
 	DisposalRejected
@@ -343,31 +345,48 @@ func (k *MemoryKernel) Forget(id string, actor types.Actor) (DisposalOutcome, er
 	if err != nil {
 		return DisposalNothing, err
 	}
-	events, err := k.decisions.Events(EventFilter{DecisionID: id, Limit: 1})
-	if err != nil {
-		return DisposalNothing, err
-	}
-	if len(events) == 0 {
-		// No history to protect, so this is a plain delete on either channel.
-		deleted, err := k.store.DeleteByID(id)
-		if err != nil || !deleted {
+
+	// The channel decides first, before anything is deleted. An agent's forget
+	// of a decision transitions nothing and destroys nothing, whatever the
+	// decision's event count — A3.1 states that guarantee without a carve-out,
+	// and a hard delete is strictly worse than the transition it forbids.
+	//
+	// The zero-event delete used to sit above this. It looked harmless ("no
+	// history to protect") and was not: §D7's documented migration exception
+	// means `migrate --from-v1` writes one `migration.completed` row and no
+	// per-decision events, so after a migration *every* decision has zero
+	// events. An agent could hard-delete any of them — no transition, no
+	// request, no row in the triage queue, and the FK from `events` that §D3
+	// calls the backstop cannot fire when there are no events to reference
+	// (F31). The vulnerable population was precisely the founder's pre-existing
+	// corpus, which is what the migration exists to preserve.
+	if actor == types.ActorAgent {
+		if d.Status.IsTerminal() {
+			return DisposalNothing, nil // already disposed of; nothing to request
+		}
+		k.governanceStamp()
+		if err := k.decisions.RequestDisposal(id, "", actor); err != nil {
 			return DisposalNothing, err
 		}
-		return DisposalDeleted, nil
+		return DisposalRequested, nil
 	}
 
 	if d.Status.IsTerminal() {
 		return DisposalNothing, nil // already disposed of; nothing to do
 	}
 
+	// Human channel. §D3's forget mapping is the primary rule for a decision —
+	// "forget" maps to `rejected` (if proposed) or `reverted` (if
+	// active/violated) — and it states no zero-event exception. §D3's other
+	// sentence ("hard delete remains possible only for rows with zero events")
+	// is read here as covering rows the mapping does not: it is the residue
+	// where the FK backstop does not bite, not a shortcut that overrides the
+	// mapping. Reading it the other way makes `decision revert <migrated-id>`
+	// destroy the row it promises to keep, and makes the shipped template copy
+	// ("memory_forget on a decision deletes nothing") false for every migrated
+	// decision. Whether the carve-out should survive §D9's grandfathered
+	// population at all is escalated in planning/decisions-log.md.
 	k.governanceStamp()
-
-	if actor == types.ActorAgent {
-		if err := k.decisions.RequestDisposal(id, "", actor); err != nil {
-			return DisposalNothing, err
-		}
-		return DisposalRequested, nil
-	}
 
 	switch d.Status {
 	case types.StatusProposed:
