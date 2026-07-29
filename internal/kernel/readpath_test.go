@@ -227,6 +227,53 @@ func TestContextForFiles_GlobMatchesDecisionScopes(t *testing.T) {
 	}
 }
 
+// F16: the class preference in memory_context must be a sort key applied
+// before the cap, not the order in which two result sets were concatenated.
+// As concatenated, one recency ordering per class meant a note could be
+// unreachable no matter how recent it was.
+func TestContextForFiles_OrdersByClassThenRecency(t *testing.T) {
+	k := readPathKernel(t)
+
+	// A note matching the path exactly, saved *last* so recency cannot explain
+	// the ordering, and two decisions scoped to it.
+	older, _, err := k.Save(types.MemorySaveInput{
+		Content: "Older decision about the store.", Type: types.MemoryTypeDecision,
+		Source: types.MemorySourceUser, FilePaths: []string{"internal/kernel/**"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, _, err := k.Save(types.MemorySaveInput{
+		Content: "Newer decision about the store.", Type: types.MemoryTypeDecision,
+		Source: types.MemorySourceUser, FilePaths: []string{"internal/kernel/store.go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	note, _, err := k.Save(types.MemorySaveInput{
+		Content: "The store has two FTS tables.", Type: types.MemoryTypeFact,
+		Source: types.MemorySourceUser, FilePaths: []string{"internal/kernel/store.go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := k.Store().FindByFilePaths(testProject, []string{"internal/kernel/store.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("matched %d rows, want 3", len(got))
+	}
+	wantOrder := []string{newer.ID, older.ID, note.ID}
+	for i, want := range wantOrder {
+		if got[i].ID != want {
+			t.Fatalf("position %d = %s (%s), want %s — expected decisions by recency, then notes",
+				i, got[i].ID, got[i].Type, want)
+		}
+	}
+}
+
 // ADR-0001's stated behaviour change: an agent's decision no longer binds on
 // save. A human's does, because the human is the confirmation (D2).
 func TestSave_BirthStateFollowsTheSource(t *testing.T) {

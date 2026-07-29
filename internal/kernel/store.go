@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -490,10 +491,37 @@ func (s *MemoryStore) FindByFilePaths(projectID string, paths []string) ([]types
 		return nil, err
 	}
 
+	// One ordering across both classes, applied *before* the cap. The previous
+	// code concatenated decisions-by-recency with notes-by-recency and capped
+	// afterwards, so the preference for decisions was an accident of append
+	// order — and with more matching decisions than the caller's limit, no
+	// exact-matched note could ever be reached regardless of recency (F16).
+	//
+	// The preference itself is kept and made deliberate: within a file scope a
+	// decision is binding and a note is explicitly ungoverned (§D1), so a
+	// glob-matched decision outranks an exact-matched note. The consequence is
+	// named rather than incidental — a path matched by many live decisions can
+	// fill the caller's limit on its own.
+	sort.SliceStable(result, func(i, j int) bool {
+		ri, rj := classRank(result[i].Type), classRank(result[j].Type)
+		if ri != rj {
+			return ri < rj
+		}
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
+
 	if len(result) > 50 {
 		result = result[:50]
 	}
 	return result, nil
+}
+
+// classRank orders the two classes for context assembly: governed first.
+func classRank(t types.MemoryType) int {
+	if t.IsDecision() {
+		return 0
+	}
+	return 1
 }
 
 // FindUnembedded returns ids and content for live memories with no embedding.
