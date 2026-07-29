@@ -332,8 +332,7 @@ func TestInitCmd_RecordsTheObservationEpoch(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	isolateConfig(t)
 	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -366,7 +365,7 @@ func TestInitCmd_CreatesAGitignoreWhenThereIsNone(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	t.Setenv("HOME", t.TempDir())
+	isolateConfig(t)
 	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

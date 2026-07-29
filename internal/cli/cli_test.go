@@ -17,6 +17,24 @@ import (
 	"github.com/varve-sh/varve/internal/util"
 )
 
+// isolateConfig points the global config at a temp directory for the duration of
+// a test.
+//
+// Setting HOME alone is not enough, and CI proved it: os.UserConfigDir() returns
+// $HOME/Library/Application Support on macOS but prefers $XDG_CONFIG_HOME on
+// Linux. On a runner with XDG_CONFIG_HOME set, every test that believed it had
+// isolated its config was reading and writing the runner's real one — the whole
+// suite shared a single config file and saw each other's projects. Invisible on
+// a Mac, which is why it shipped. Both variables are set so the isolation holds
+// on either platform.
+func isolateConfig(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	return home
+}
+
 // setupProject creates a temp directory that looks like an initialized varve
 // project. It returns the project root and a kernel pre-populated with the
 // provided memories. The test's cwd is changed to the project root for the
@@ -24,9 +42,7 @@ import (
 func setupProject(t *testing.T, memories ...types.MemorySaveInput) (*kernel.MemoryKernel, string) {
 	t.Helper()
 
-	// Isolate ~/.config/varve to a temp home so we don't pollute the real one
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	isolateConfig(t)
 
 	root := t.TempDir()
 
@@ -160,8 +176,7 @@ func TestSaveCmd_WithFlags(t *testing.T) {
 }
 
 func TestSaveCmd_NotInitialized(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	isolateConfig(t)
 
 	// Temp dir with no .varve/ and no .git/
 	bare := t.TempDir()

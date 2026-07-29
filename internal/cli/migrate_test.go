@@ -15,7 +15,7 @@ import (
 // setupV1Project builds a project whose database is still v1, with n rows.
 func setupV1Project(t *testing.T) (root string, ids []string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	isolateConfig(t)
 	t.Setenv("VARVE_EMBED_PROVIDER", "disabled")
 
 	root, err := filepath.EvalSymlinks(t.TempDir())

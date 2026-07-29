@@ -303,8 +303,18 @@ func TestGenerateID_Length(t *testing.T) {
 func TestGetProjectConfig_AdoptsProjectsRegisteredBeforeTheRename(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
-	legacyDir := filepath.Join(home, "Library", "Application Support", "memtrace")
+	// Derived, never hardcoded. The first version of this test wrote to
+	// $HOME/Library/Application Support/memtrace — the macOS layout — so on Linux
+	// it seeded a path the code never reads and asserted a merge that could not
+	// happen. os.UserConfigDir() is the same call legacyConfigPaths uses, so the
+	// fixture lands wherever the code will look.
+	base, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDir := filepath.Join(base, "memtrace")
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +343,12 @@ func TestGetProjectConfig_AdoptsProjectsRegisteredBeforeTheRename(t *testing.T) 
 func TestGetProjectConfig_PrimaryWinsOverLegacy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	legacyDir := filepath.Join(home, "Library", "Application Support", "memtrace")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	base, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDir := filepath.Join(base, "memtrace")
 	os.MkdirAll(legacyDir, 0o755)
 	os.WriteFile(filepath.Join(legacyDir, "config.json"),
 		[]byte(`{"projects":{"/w/one":{"id":"stale","name":"old"}}}`), 0o644)

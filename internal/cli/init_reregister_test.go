@@ -20,8 +20,7 @@ import (
 // This pins adoption of the existing id, on the shape of a real store: rows
 // filed under one project_id that the config does not know about.
 func TestInit_ReRegisterAdoptsTheStoresProjectID(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	isolateConfig(t)
 	root := t.TempDir()
 	t.Chdir(root)
 
@@ -79,8 +78,7 @@ func TestInit_ReRegisterAdoptsTheStoresProjectID(t *testing.T) {
 
 // An empty store has no id to adopt, so minting one is correct.
 func TestInit_ReRegisterMintsAnIDOnlyWhenTheStoreIsEmpty(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	isolateConfig(t)
 	root := t.TempDir()
 	t.Chdir(root)
 
