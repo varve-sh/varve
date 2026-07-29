@@ -311,9 +311,9 @@ const (
 // Forget disposes of a memory, by the rules of the channel it came from.
 //
 // Notes keep v1 hard-delete semantics on every channel — they are ungoverned
-// (D1). A decision with any event history is never hard-deleted (D3): "forget"
-// maps onto the lifecycle, and §D3's mapping is **channel-dependent**
-// (Amendment 3, A3.1):
+// (D1). A decision is never hard-deleted here at all (D3 as amended by
+// Amendment 4): "forget" maps onto the lifecycle, and the mapping is
+// **channel-dependent** (Amendment 3, A3.1):
 //
 //   - actor `human` (CLI, TUI): the human is the confirmation, so the
 //     transition happens — `rejected` while proposed, `reverted` once binding.
@@ -381,11 +381,9 @@ func (k *MemoryKernel) Forget(id string, actor types.Actor) (DisposalOutcome, er
 	// sentence ("hard delete remains possible only for rows with zero events")
 	// is read here as covering rows the mapping does not: it is the residue
 	// where the FK backstop does not bite, not a shortcut that overrides the
-	// mapping. Reading it the other way makes `decision revert <migrated-id>`
-	// destroy the row it promises to keep, and makes the shipped template copy
-	// ("memory_forget on a decision deletes nothing") false for every migrated
-	// decision. Whether the carve-out should survive §D9's grandfathered
-	// population at all is escalated in planning/decisions-log.md.
+	// mapping. Amendment 4 removed the carve-out outright: no forget path
+	// destroys a decision on any channel, and the capability it described now
+	// lives in one explicitly-named place, `Purge`.
 	k.governanceStamp()
 
 	switch d.Status {

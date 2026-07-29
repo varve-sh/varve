@@ -40,6 +40,12 @@ var (
 	ErrViolationAlreadyResolved = errors.New("that violation episode is already resolved")
 )
 
+// ErrPurgeNotPermitted rejects a purge attempted by an agent. Purge is the
+// only irreversible verb in the product: CLI/TUI, human actor, typed
+// confirmation (ADR-0001 Amendment 4). An agent may propose and may request
+// disposal; it may never destroy.
+var ErrPurgeNotPermitted = errors.New("purge is a human action: it is irreversible, and an agent may only request disposal")
+
 // ErrDuplicateEvidence is returned when the same (decision, kind, ref) is
 // attached twice. idx_evidence_dedupe already prevents it; this makes the
 // refusal a typed, actionable error instead of a raw SQLite constraint abort

@@ -38,7 +38,14 @@ const (
 	// active → reverted. The terminal call stays human. Repeats are legal facts
 	// — no dedup index, deliberately.
 	EventDecisionDisposalRequested EventKind = "decision.disposal_requested"
-	EventEvidenceAdded             EventKind = "evidence.added"
+	// EventDecisionPurged records an irreversible removal (ADR-0001
+	// Amendment 4). Two shapes: the redaction arm sets decision_id and lists
+	// the redacted field *names* (never their content); the hard-delete arm
+	// leaves decision_id NULL — the row is gone, so the FK cannot reference it
+	// — and carries the purged id in the payload. Human channel only; never
+	// part of any attribution join.
+	EventDecisionPurged EventKind = "decision.purged"
+	EventEvidenceAdded  EventKind = "evidence.added"
 )
 
 // Attribution-substrate events. Emitted by the packer (ADR-0002) and the
@@ -71,6 +78,7 @@ var knownEventKinds = map[EventKind]bool{
 	EventDecisionReverted:           true,
 	EventDecisionExpired:            true,
 	EventDecisionDisposalRequested:  true,
+	EventDecisionPurged:             true,
 	EventEvidenceAdded:              true,
 	EventSessionStarted:             true,
 	EventSessionEnded:               true,
