@@ -16,6 +16,7 @@ import (
 func newInitCmd() *cobra.Command {
 	var name string
 	var noImport bool
+	var noHooks bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -71,6 +72,15 @@ func newInitCmd() *cobra.Command {
 			}
 			defer k.Close()
 
+			// ADR-0004 §D1.3: the observation epoch, written once. The
+			// catch-up scan never walks past it, so a fresh install does not
+			// silently backfill verdicts about commits that predate the store —
+			// archaeology dressed as attribution is the first thing an auditor
+			// catches.
+			if err := k.RecordObserverEnabled(time.Now().UTC()); err != nil {
+				return fmt.Errorf("recording the observation epoch: %w", err)
+			}
+
 			// Add .memtrace/ to .gitignore
 			addToGitignore(projectRoot)
 
@@ -93,6 +103,13 @@ func newInitCmd() *cobra.Command {
 				fmt.Printf("Imported %d memories (%s)\n", result.Total, strings.Join(parts, ", "))
 			}
 
+			// §D1.1: offer the hook (default yes, declinable). It never blocks,
+			// never prints and cannot fail a commit; `memtrace scan` recovers
+			// whatever it misses.
+			if !noHooks {
+				installPostCommitHook(projectRoot)
+			}
+
 			fmt.Println("\nNext: run 'memtrace setup' to wire the MCP server into your agent.")
 			return nil
 		},
@@ -100,6 +117,8 @@ func newInitCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Project name (default: directory name)")
 	cmd.Flags().BoolVar(&noImport, "no-import", false, "Skip auto-importing from Claude/Cursor/git")
+	cmd.Flags().BoolVar(&noHooks, "no-hooks", false,
+		"Skip installing the post-commit hook that feeds attribution")
 	return cmd
 }
 

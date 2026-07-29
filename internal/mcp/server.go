@@ -3,15 +3,28 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/memtrace-dev/memtrace/internal/kernel"
+	"github.com/memtrace-dev/memtrace/internal/observer"
 	"github.com/memtrace-dev/memtrace/internal/pack"
 	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/memtrace-dev/memtrace/internal/util"
 )
+
+// workingDir is where the server was started, which is the repository the
+// agent is working in.
+func workingDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
 
 // mcpAgentName is the provenance stamped on writes arriving over MCP.
 const mcpAgentName = "mcp"
@@ -31,6 +44,20 @@ func Serve(k *kernel.MemoryKernel) error {
 	// join against.
 	tracker := newSessionTracker(k.BeginSession(mcpAgentName, ""))
 	registerTools(s, k, tracker)
+
+	// ADR-0004 §D1.2: the catch-up scan runs as a background goroutine at
+	// session start, never on a timer and never blocking. Tools serve
+	// immediately; the scan closes whatever gap the hook left — commits pulled
+	// from a teammate, made before install, or lost to a busy database.
+	//
+	// Errors are swallowed by design (§D7): the observer's own failures belong
+	// in .memtrace/observer.log and in `memtrace report`'s completeness line,
+	// never in an agent's tool output.
+	go func() {
+		if root := util.FindProjectRoot(workingDir()); root != "" {
+			_, _ = observer.Scan(k, observer.ScanOptions{RepoRoot: root})
+		}
+	}()
 
 	err := server.ServeStdio(s)
 
