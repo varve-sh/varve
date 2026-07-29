@@ -60,6 +60,10 @@ The command is idempotent — running it again is safe.`,
 				}
 				any = true
 			}
+			for _, n := range setupNotices {
+				fmt.Printf("  [note] %s\n", n)
+			}
+			setupNotices = nil
 
 			if !any {
 				fmt.Println("No agents set up. Specify an agent:")
@@ -306,10 +310,18 @@ func addToGeminiMd(projectRoot string) {
 	appendInstructions(filepath.Join(projectRoot, "GEMINI.md"), geminiMdSnippet)
 }
 
-// appendInstructions appends snippet to path if "varve" is not already present.
+// appendInstructions appends snippet to path unless this tool's instructions
+// are already there — under either name.
+//
+// Checking only for "varve" would append a second block to every agent file
+// written before the rename, leaving the file with two instruction sections
+// that disagree about the tool's own governance rules. The pre-rename block is
+// left in place rather than rewritten: it is the user's file, and a setup
+// command that edits prose it did not write is worse than one that declines.
+// `varve setup --force` is the way to replace it.
 func appendInstructions(path, snippet string) {
 	data, _ := os.ReadFile(path)
-	if strings.Contains(string(data), "varve") {
+	if strings.Contains(string(data), "varve") || strings.Contains(string(data), "memtrace") {
 		return
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -319,6 +331,10 @@ func appendInstructions(path, snippet string) {
 	defer f.Close()
 	f.WriteString(snippet)
 }
+
+// setupNotices collects changes setup made to files the user owns, so they are
+// reported rather than discovered. Drained by the setup command.
+var setupNotices []string
 
 // writeMCPEntry reads (or creates) the JSON config at path, merges the varve
 // entry under the given key, and writes it back. Returns false if already present.
@@ -348,6 +364,16 @@ func writeMCPEntry(path, serversKey string, entry map[string]interface{}) (bool,
 	// Already present — nothing to do
 	if _, exists := servers["varve"]; exists {
 		return false, nil
+	}
+
+	// A pre-rename `memtrace` entry is replaced, not left beside the new one.
+	// Two entries would register the same tool names twice against the same
+	// store, and the stale one points at a binary the user is replacing — so the
+	// agent would see duplicate memory_* tools, one of them broken.
+	if _, exists := servers["memtrace"]; exists {
+		delete(servers, "memtrace")
+		setupNotices = append(setupNotices,
+			"replaced the pre-rename `memtrace` server entry in "+path)
 	}
 
 	servers["varve"] = entry

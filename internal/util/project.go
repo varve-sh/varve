@@ -127,24 +127,24 @@ func GetProjectConfig() *ProjectConfig {
 	primary := GetConfigPath()
 	cfg := readConfig(primary)
 
-	// Check for a legacy config at ~/.config/varve/config.json (used before
-	// os.UserConfigDir() was adopted). Merge any projects that are missing from
-	// the primary config, then persist so future reads are self-contained.
-	legacy := legacyConfigPath()
-	if legacy != "" && legacy != primary {
-		if lcfg := readConfig(legacy); len(lcfg.Projects) > 0 {
-			merged := false
-			for k, v := range lcfg.Projects {
-				if _, exists := cfg.Projects[k]; !exists {
-					cfg.Projects[k] = v
-					merged = true
-				}
-			}
-			if merged {
-				_ = os.MkdirAll(GetConfigDir(), 0755)
-				_ = SaveProjectConfig(cfg)
+	// Merge any projects missing from the primary config out of the legacy
+	// locations, then persist so future reads are self-contained.
+	merged := false
+	for _, legacy := range legacyConfigPaths() {
+		if legacy == "" || legacy == primary {
+			continue
+		}
+		lcfg := readConfig(legacy)
+		for k, v := range lcfg.Projects {
+			if _, exists := cfg.Projects[k]; !exists {
+				cfg.Projects[k] = v
+				merged = true
 			}
 		}
+	}
+	if merged {
+		_ = os.MkdirAll(GetConfigDir(), 0755)
+		_ = SaveProjectConfig(cfg)
 	}
 
 	return cfg
@@ -166,14 +166,38 @@ func readConfig(path string) *ProjectConfig {
 	return &cfg
 }
 
-// legacyConfigPath returns the old ~/.config/varve/config.json path that was
-// used before os.UserConfigDir() was adopted. Returns "" if it cannot be determined.
-func legacyConfigPath() string {
+// legacyConfigPaths returns every config location a previous version wrote to,
+// newest naming first.
+//
+// Two eras, and missing either one strands a working install:
+//
+//   - The **memtrace era**. `GetConfigDir()` is derived from the product name,
+//     so the rename moved it from `<UserConfigDir>/memtrace` to
+//     `<UserConfigDir>/varve`. Every project a user registered before the rename
+//     lives in the old file, and without this the new binary reports
+//     "not initialized" in a directory that has been working for months —
+//     an orphaned store with extra steps.
+//   - The **pre-UserConfigDir era**, `~/.config/<name>/config.json`, from before
+//     os.UserConfigDir() was adopted. Both namings are listed because a user can
+//     have crossed both boundaries.
+//
+// Merging is one-way and additive: entries are copied into the primary config
+// and the old files are left untouched, so a rollback to the previous binary
+// still finds its own config where it left it.
+func legacyConfigPaths() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return nil
 	}
-	return filepath.Join(home, ".config", "varve", "config.json")
+	var out []string
+	if dir, err := os.UserConfigDir(); err == nil {
+		out = append(out, filepath.Join(dir, "memtrace", "config.json"))
+	}
+	out = append(out,
+		filepath.Join(home, ".config", "varve", "config.json"),
+		filepath.Join(home, ".config", "memtrace", "config.json"),
+	)
+	return out
 }
 
 // SaveProjectConfig writes the config to disk, creating the directory if needed.

@@ -346,3 +346,53 @@ func TestRepoClaudeMD_StatesTheSameNormativeContent(t *testing.T) {
 		}
 	}
 }
+
+// Two servers registering the same memory_* tools against the same store is
+// worse than one: the agent sees duplicates and the stale entry points at a
+// binary the user is replacing.
+func TestWriteMCPEntry_ReplacesThePreRenameServerEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"memtrace":{"command":"memtrace","args":["serve"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupNotices = nil
+	written, err := writeMCPEntry(path, "mcpServers", map[string]interface{}{
+		"command": "varve", "args": []string{"serve"},
+	})
+	if err != nil || !written {
+		t.Fatalf("writeMCPEntry = %v, %v", written, err)
+	}
+	data, _ := os.ReadFile(path)
+	var cfg map[string]map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, stale := cfg["mcpServers"]["memtrace"]; stale {
+		t.Errorf("the pre-rename entry survived alongside the new one: %s", data)
+	}
+	if _, ok := cfg["mcpServers"]["varve"]; !ok {
+		t.Errorf("the varve entry was not written: %s", data)
+	}
+	// Changes to a file the user owns are reported, not discovered later.
+	if len(setupNotices) == 0 || !strings.Contains(setupNotices[0], "memtrace") {
+		t.Errorf("replacing the legacy entry was not reported: %v", setupNotices)
+	}
+	setupNotices = nil
+}
+
+// A pre-rename CLAUDE.md already carries this tool's instructions. Appending a
+// second block leaves the file with two sections that disagree about the tool's
+// own governance rules.
+func TestAppendInstructions_DoesNotDuplicateAPreRenameBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "CLAUDE.md")
+	existing := "# memtrace\n\nUse memory_recall before every task.\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	appendInstructions(path, "# varve\n\nUse memory_pack at session start.\n")
+	got, _ := os.ReadFile(path)
+	if string(got) != existing {
+		t.Errorf("a second instruction block was appended:\n%s", got)
+	}
+}

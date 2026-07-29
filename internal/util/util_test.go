@@ -293,3 +293,55 @@ func TestGenerateID_Length(t *testing.T) {
 		t.Errorf("expected ULID length 26, got %d (%s)", len(id), id)
 	}
 }
+
+// The rename derives GetConfigDir() from the product name, so it moved the
+// global config from <UserConfigDir>/memtrace to <UserConfigDir>/varve. Every
+// project registered before the rename lives in the old file, and missing it
+// means the new binary reports "not initialized" in a directory that has been
+// working for months. Tested against the real config's shape: projects keyed by
+// absolute path.
+func TestGetProjectConfig_AdoptsProjectsRegisteredBeforeTheRename(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	legacyDir := filepath.Join(home, "Library", "Application Support", "memtrace")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const legacy = `{"projects":{"/w/one":{"id":"p1","name":"one","created_at":"2026-03-01T00:00:00Z"},` +
+		`"/w/two":{"id":"p2","name":"two","created_at":"2026-03-02T00:00:00Z"}}}`
+	if err := os.WriteFile(filepath.Join(legacyDir, "config.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := GetProjectConfig()
+	for _, want := range []string{"/w/one", "/w/two"} {
+		if _, ok := cfg.Projects[want]; !ok {
+			t.Errorf("project %s registered before the rename is invisible; got %v", want, cfg.Projects)
+		}
+	}
+	// Merged forward and persisted, so later reads are self-contained.
+	if _, err := os.Stat(GetConfigPath()); err != nil {
+		t.Errorf("the merge was not persisted to the primary config: %v", err)
+	}
+	// One-way: rolling back to the previous binary must still find its config.
+	if _, err := os.Stat(filepath.Join(legacyDir, "config.json")); err != nil {
+		t.Errorf("the legacy config was consumed rather than copied: %v", err)
+	}
+}
+
+func TestGetProjectConfig_PrimaryWinsOverLegacy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacyDir := filepath.Join(home, "Library", "Application Support", "memtrace")
+	os.MkdirAll(legacyDir, 0o755)
+	os.WriteFile(filepath.Join(legacyDir, "config.json"),
+		[]byte(`{"projects":{"/w/one":{"id":"stale","name":"old"}}}`), 0o644)
+	os.MkdirAll(GetConfigDir(), 0o755)
+	os.WriteFile(GetConfigPath(),
+		[]byte(`{"projects":{"/w/one":{"id":"current","name":"new"}}}`), 0o644)
+
+	if got := GetProjectConfig().Projects["/w/one"].ID; got != "current" {
+		t.Errorf("legacy config overwrote the current one: id = %q", got)
+	}
+}
