@@ -336,6 +336,41 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 		StatusChangedAt: now,
 	}
 
+	if err := s.insertDecisionWithBirthEventTx(tx, d, in.Via); err != nil {
+		return nil, err
+	}
+
+	for _, e := range in.Evidence {
+		if _, err := insertEvidence(tx, d.ID, e, false, now); err != nil {
+			return nil, err
+		}
+	}
+
+	return d, nil
+}
+
+// promotedNotePrefix marks a decision born from a note (A2.3). It is carried
+// on source_ref, which is the durable link between the two rows.
+const promotedNotePrefix = "note:"
+
+// insertDecisionWithBirthEventTx is the **only** way a decision row is created
+// outside the v1→v2 migration, and it writes the row and its `decision.proposed`
+// birth event in the same transaction. That pairing is invariant **I1**
+// (ADR-0001 §D7, made normative by Amendment 4), and it is one function rather
+// than a convention for a reason:
+//
+// §D7's migration exception means `migrate --from-v1` writes no per-decision
+// events, so "this decision has no birth event" is the *definition* of
+// migration-born. Every rule keyed on event emptiness — purge's hard-delete
+// arm, falsifiers 1 and 4 — depends on that predicate being exact. If any
+// creation path could insert a row without its birth event, the predicate
+// silently becomes "migration-born, or something we forgot", which is precisely
+// how F31 happened: an emptiness test whose premise was false for a whole
+// population.
+//
+// A structural test asserts no other non-test code inserts into `decisions`
+// (TestI1_OnlyTheSanctionedPathsInsertDecisions).
+func (s *DecisionStore) insertDecisionWithBirthEventTx(tx *sql.Tx, d *types.Decision, via string) error {
 	if _, err := tx.Exec(`
 		INSERT INTO decisions (`+decisionColumns+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -347,23 +382,17 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 		fmtTime(d.CreatedAt), fmtTime(d.UpdatedAt), nil, fmtTime(d.StatusChangedAt), nil, 0,
 		nullableString(d.PendingTopicKey),
 	); err != nil {
-		return nil, fmt.Errorf("inserting decision: %w", err)
+		return fmt.Errorf("inserting decision: %w", err)
 	}
 
-	for _, e := range in.Evidence {
-		if _, err := insertEvidence(tx, d.ID, e, false, now); err != nil {
-			return nil, err
-		}
-	}
-
-	payload := map[string]any{"via": in.Via}
+	payload := map[string]any{"via": via}
 	switch {
 	case d.TopicKey != "":
 		payload["topic_key"] = d.TopicKey
-	case pendingTopicKey != "":
-		payload["topic_key"] = pendingTopicKey
+	case d.PendingTopicKey != "":
+		payload["topic_key"] = d.PendingTopicKey
 	}
-	if _, err := s.emit(tx, EventInput{
+	_, err := s.emit(tx, EventInput{
 		ProjectID:  d.ProjectID,
 		Kind:       types.EventDecisionProposed,
 		Actor:      actorFor(d.Source),
@@ -372,15 +401,9 @@ func (s *DecisionStore) proposeTx(tx *sql.Tx, in *DecisionInput) (*types.Decisio
 		Agent:      d.Agent,
 		Model:      d.Model,
 		Payload:    payload,
-	}); err != nil {
-		return nil, err
-	}
-	return d, nil
+	})
+	return err
 }
-
-// promotedNotePrefix marks a decision born from a note (A2.3). It is carried
-// on source_ref, which is the durable link between the two rows.
-const promotedNotePrefix = "note:"
 
 // AcceptOptions controls a proposed→active transition.
 type AcceptOptions struct {
@@ -1436,6 +1459,34 @@ func (s *DecisionStore) Evidence(decisionID string) ([]types.Evidence, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// birthEventKinds are the events invariant I1 requires every non-migration
+// creation path to write in the creating transaction (ADR-0001 §D7/Amendment 4).
+var birthEventKinds = []types.EventKind{
+	types.EventDecisionProposed, types.EventDecisionAccepted,
+}
+
+// MigrationBorn reports whether a decision predates observation: it has no
+// birth event, which under I1 is exact — `migrate --from-v1` writes one
+// `migration.completed` event and no per-decision history, deliberately, and
+// every other creation path pairs the row with its birth event.
+//
+// The distinction this predicate carries is the one F31 got wrong. For a
+// migration-born row, "no events" means *we refused to fabricate history we did
+// not observe* — close to the opposite of "nothing worth keeping". Consumers:
+// purge's hard-delete arm (Amendment 4), and falsifiers 1 and 4, which exclude
+// this population so v1 staleness and v1 data-entry habits cannot falsify v2's
+// own gates.
+func (s *DecisionStore) MigrationBorn(id string) (bool, error) {
+	var n int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM events
+		 WHERE decision_id = ? AND kind IN ('decision.proposed','decision.accepted')`,
+		id).Scan(&n); err != nil {
+		return false, fmt.Errorf("checking birth events: %w", err)
+	}
+	return n == 0, nil
 }
 
 // EvidenceByProject returns evidence for every packable decision in the

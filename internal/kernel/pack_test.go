@@ -10,6 +10,7 @@ import (
 
 	"github.com/memtrace-dev/memtrace/internal/pack"
 	"github.com/memtrace-dev/memtrace/internal/types"
+	"github.com/memtrace-dev/memtrace/internal/util"
 )
 
 // The packer against the real store and the real event log. The unit tests in
@@ -46,6 +47,29 @@ func acceptedDecision(t *testing.T, k *MemoryKernel, title string, scope []strin
 		t.Fatalf("accept %q: %v", title, err)
 	}
 	return d
+}
+
+// seedMigrationBornDecision inserts a decision exactly as `migrate --from-v1`
+// does: the row directly, and no per-decision events (§D7's documented
+// exception). Under invariant I1 that absence is what makes it identifiable as
+// migration-born.
+func seedMigrationBornDecision(t *testing.T, k *MemoryKernel, title string) string {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	id := util.GenerateID()
+	if _, err := k.Decisions().DB().Exec(`
+		INSERT INTO decisions (id, project_id, kind, title, body, status, scope, confidence,
+		    source, tags, supersedes, created_at, updated_at, decided_at, status_changed_at,
+		    access_count)
+		VALUES (?, ?, 'decision', ?, '', 'active', '[]', 1.0,
+		    'import', '[]', '[]', ?, ?, ?, ?, 0)`,
+		id, testProject, title, now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if evs, _ := k.Decisions().Events(EventFilter{DecisionID: id}); len(evs) != 0 {
+		t.Fatalf("fixture has %d events; the point is that it has none", len(evs))
+	}
+	return id
 }
 
 func TestPack_ServesBindingDecisionsAndRecordsThem(t *testing.T) {
@@ -347,21 +371,7 @@ func TestPack_LatencyEnvelope(t *testing.T) {
 func TestForget_AMigratedDecisionIsNotAgentDeletable(t *testing.T) {
 	k := packKernel(t)
 
-	// A decision exactly as migrate_v1 writes one: inserted directly, no events.
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	id := "01MIGRATEDDECISION00000000"
-	if _, err := k.Decisions().DB().Exec(`
-		INSERT INTO decisions (id, project_id, kind, title, body, status, scope, confidence,
-		    source, tags, supersedes, created_at, updated_at, decided_at, status_changed_at,
-		    access_count)
-		VALUES (?, ?, 'decision', 'Sessions are server-side only', '', 'active', '[]', 1.0,
-		    'import', '[]', '[]', ?, ?, ?, ?, 0)`,
-		id, testProject, now, now, now, now); err != nil {
-		t.Fatal(err)
-	}
-	if evs, _ := k.Decisions().Events(EventFilter{DecisionID: id}); len(evs) != 0 {
-		t.Fatalf("fixture has %d events; the point is that it has none", len(evs))
-	}
+	id := seedMigrationBornDecision(t, k, "Sessions are server-side only")
 
 	outcome, err := k.Forget(id, types.ActorAgent)
 	if err != nil {
@@ -399,17 +409,7 @@ func TestForget_AMigratedDecisionIsNotAgentDeletable(t *testing.T) {
 func TestForget_AMigratedDecisionRevertsRatherThanVanishing(t *testing.T) {
 	k := packKernel(t)
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	id := "01MIGRATEDDECISION00000001"
-	if _, err := k.Decisions().DB().Exec(`
-		INSERT INTO decisions (id, project_id, kind, title, body, status, scope, confidence,
-		    source, tags, supersedes, created_at, updated_at, decided_at, status_changed_at,
-		    access_count)
-		VALUES (?, ?, 'decision', 'Sessions are server-side only', '', 'active', '[]', 1.0,
-		    'import', '[]', '[]', ?, ?, ?, ?, 0)`,
-		id, testProject, now, now, now, now); err != nil {
-		t.Fatal(err)
-	}
+	id := seedMigrationBornDecision(t, k, "Sessions are server-side only")
 
 	outcome, err := k.Forget(id, types.ActorHuman)
 	if err != nil {
