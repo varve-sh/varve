@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/memtrace-dev/memtrace/internal/util"
 )
 
 // idempotencyBudget is ADR-0001 Amendment 6 / ADR-0005 open question 1's
@@ -17,11 +19,47 @@ import (
 // unmeasured is the failure on the other side.
 const idempotencyBudget = 5 * time.Second
 
+// storeMultiple is F50's correction: the cost of the SELECT-before-insert path
+// is O(candidates × store rows), because `source_ref` is unindexed by design
+// (ADR-0001 A6.2 defers the index). A fixture holding store size equal to
+// candidate count measures the favourable diagonal and would keep reporting a
+// comfortable number while the real shape — a large corpus re-imported in
+// batches — crossed the trigger.
+//
+// 20 × 1,000 candidates ≈ a 20k-row claude-mem store, which is the volume the
+// wave-1 importers are aimed at.
+const storeMultiple = 20
+
 func TestImportIdempotency_CostPerThousandCandidates(t *testing.T) {
 	if testing.Short() {
 		t.Skip("measurement test")
 	}
 	k := setupTestKernel(t)
+
+	// Seed the store an order of magnitude above the candidate count, so the
+	// per-lookup scan cost is what the measurement measures.
+	// Seeded with raw inserts rather than through ImportBatch: seeding via the
+	// import path would itself pay the quadratic cost this test is measuring,
+	// and the seed is not the measurement.
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := k.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1000*(storeMultiple-1); i++ {
+		if _, err := tx.Exec(`INSERT INTO notes
+			(id, project_id, content, source, source_ref, status, created_at, updated_at)
+			VALUES (?,?,?, 'import', ?, 'active', ?, ?)`,
+			util.GenerateID(), k.projectID,
+			fmt.Sprintf("Unrelated session observation %d", i),
+			fmt.Sprintf("ballast:%d", i), now, now); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
 
 	const n = 1000
 	candidates := make([]ImportCandidate, 0, n)
@@ -54,7 +92,17 @@ func TestImportIdempotency_CostPerThousandCandidates(t *testing.T) {
 		t.Fatalf("re-import skipped %d of %d — the measurement is not measuring idempotency",
 			len(res.Skipped), n)
 	}
-	t.Logf("idempotency checking for %d candidates: %v (trigger: %v)", n, elapsed, idempotencyBudget)
+	var storeRows int
+	if err := k.db.QueryRow(`SELECT (SELECT COUNT(*) FROM notes) + (SELECT COUNT(*) FROM decisions)`).
+		Scan(&storeRows); err != nil {
+		t.Fatal(err)
+	}
+	if storeRows < n*storeMultiple/2 {
+		t.Fatalf("store holds %d rows for %d candidates — the fixture is back on the diagonal",
+			storeRows, n)
+	}
+	t.Logf("idempotency checking for %d candidates against %d store rows: %v (trigger: %v)",
+		n, storeRows, elapsed, idempotencyBudget)
 	if elapsed > idempotencyBudget {
 		t.Errorf("idempotency checking took %v for %d candidates, past the %v trigger — "+
 			"ship the pre-written (project_id, source_ref) index as the next migration "+
