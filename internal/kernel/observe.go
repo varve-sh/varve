@@ -69,6 +69,21 @@ func (k *MemoryKernel) ObserveCommit(c ObservedCommit) (*ObservationResult, erro
 	if c.SHA == "" {
 		return nil, &types.ValidationError{Field: "sha", Message: "must not be empty"}
 	}
+	// §D1.3's flag marks the provenance of the *verdict* — "this judgement
+	// concerns a commit that predates the store" — not the route by which the
+	// observation was requested. A user naming a pre-epoch SHA has asked for
+	// the observation, and gets it; the matches it produces are still
+	// archaeology and are still excluded from every reported metric (F42).
+	if !c.Backfill {
+		epoch, err := k.ObserverEpoch()
+		if err != nil {
+			return nil, err
+		}
+		if epoch != nil && c.CommittedAt.Before(*epoch) {
+			c.Backfill = true
+		}
+	}
+
 	res := &ObservationResult{}
 	err := k.decisions.withTx(func(tx *sql.Tx) error {
 		return k.observeCommitTx(tx, c, res)
@@ -193,10 +208,22 @@ func (k *MemoryKernel) observeCommitTx(tx *sql.Tx, c ObservedCommit, res *Observ
 
 // eligibleForMatchTx returns the decisions a commit may be judged against.
 func (k *MemoryKernel) eligibleForMatchTx(tx *sql.Tx, committedAt time.Time) ([]types.Decision, error) {
+	// The comparison is numeric, not lexicographic. `decided_at` is
+	// RFC3339Nano and `committed_at` comes from git's `%cI` at second
+	// precision, and RFC3339 strings of differing precision are not
+	// lexicographically ordered: '.' (0x2E) sorts below 'Z' (0x5A), so
+	// "13:07:37.685Z" compares *below* "13:07:37Z" and a decision accepted
+	// after a commit in the same second passed the guard (F44). Same class as
+	// the §D5.1 defect. strftime('%s') puts both sides on unix seconds, which
+	// is symmetric and format-proof; the residual is that acceptance and
+	// commit within one second are treated as simultaneous, which is the
+	// honest resolution of a timestamp we only have to the second.
 	rows, err := tx.Query(`SELECT `+decisionColumns+`
 		  FROM decisions
 		 WHERE project_id = ? AND status IN ('active','violated')
-		   AND decided_at IS NOT NULL AND decided_at <= ?
+		   AND decided_at IS NOT NULL
+		   AND CAST(strftime('%s', decided_at) AS INTEGER)
+		       <= CAST(strftime('%s', ?) AS INTEGER)
 		 ORDER BY id`, k.projectID, committedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err

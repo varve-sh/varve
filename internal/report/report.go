@@ -28,16 +28,35 @@ type Report struct {
 
 // Completeness is §D4.4 — the honesty metric about our own instrumentation.
 //
-// The intersection is deliberate. "Distinct observed commits" over
-// "default-branch-reachable commits" can exceed 100%, because the observer
-// sees feature branches the denominator excludes; a completeness metric that
-// reports 112% makes itself the auditor's first finding. What the report
-// claims is what it can prove: of the commits reachable from the default
-// branch in this period, how many did we observe.
+// Two bounds are deliberate.
+//
+// The **intersection**: "distinct observed commits" over "default-branch
+// reachable commits" can exceed 100%, because the observer sees feature
+// branches the denominator excludes, and a completeness metric that reports
+// 112% makes itself the auditor's first finding.
+//
+// The **epoch**: commits made before `varve init` are ones §D1.3 *forbids*
+// observing without an explicit backfill, so counting them measures how old
+// the repository is, not whether the observer works. Unbounded, a correct
+// observer on a repo with any history reported "1 of 13 commits observed (8%)"
+// on day one — on the one self-critical number on the artifact a team lead
+// forwards, and a number that never improved except by backfilling (F39).
+// §D4.4's stated purpose is "if the observer *missed* commits, the report says
+// so on its face"; these were not missed.
 type Completeness struct {
 	Observed  int  `json:"observed"`
 	Reachable int  `json:"reachable"`
 	Available bool `json:"available"`
+	// Since is the effective start of the denominator: the reporting period's
+	// start, or the observation epoch if that is later. Rendered, so a reader
+	// can see what the number is about.
+	Since time.Time `json:"since"`
+	// EpochBounded is true when the epoch moved the window's start — i.e. the
+	// repository has history the observer was never allowed to see.
+	EpochBounded bool `json:"epoch_bounded"`
+	// PreEpoch counts the commits excluded by that bound, so the report can
+	// name them instead of hiding them.
+	PreEpoch int `json:"pre_epoch_commits"`
 }
 
 // Build assembles everything §D6 renders.
@@ -92,7 +111,24 @@ func buildCompleteness(db *sql.DB, opts Options) (Completeness, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	reachable, err := observer.ReachableCommits(opts.RepoRoot, ref, opts.From, opts.To)
+
+	// §D1.3: the observer is not permitted to observe commits older than the
+	// epoch, so they do not belong in a metric about whether it observed what
+	// it could.
+	from := opts.From
+	epoch, err := ObserverEpoch(db)
+	if err != nil {
+		return c, err
+	}
+	if epoch != nil && epoch.After(from) {
+		if pre, err := observer.ReachableCommits(opts.RepoRoot, ref, from, *epoch); err == nil {
+			c.PreEpoch = len(pre)
+		}
+		from = *epoch
+		c.EpochBounded = true
+	}
+
+	reachable, err := observer.ReachableCommits(opts.RepoRoot, ref, from, opts.To)
 	if err != nil {
 		return c, nil // an unborn branch is not a report failure
 	}
@@ -101,6 +137,7 @@ func buildCompleteness(db *sql.DB, opts Options) (Completeness, error) {
 		return c, err
 	}
 	c.Available = true
+	c.Since = from
 	c.Reachable = len(reachable)
 	for _, sha := range reachable {
 		if observed[sha] {
@@ -202,6 +239,11 @@ func (r *Report) Text() string {
 		fmt.Fprintf(&b, "observer      %s\n",
 			rate(r.Completeness.Observed, r.Completeness.Reachable,
 				"default-branch commits observed"))
+		if r.Completeness.EpochBounded {
+			fmt.Fprintf(&b, "              since install (%s); %d earlier commits are outside\n"+
+				"              the observer's remit — `memtrace scan --backfill` covers them\n",
+				r.Completeness.Since.Format("2006-01-02"), r.Completeness.PreEpoch)
+		}
 	} else {
 		b.WriteString("observer      not measurable here (no git repository)\n")
 	}
@@ -248,9 +290,14 @@ func (r *Report) Markdown() string {
 	}
 	fmt.Fprintf(&b, "| violations undone | %d | exhibits listed below |\n", len(r.Undone))
 	if r.Completeness.Available {
-		fmt.Fprintf(&b, "| observer completeness | %s | %d commits |\n",
+		note := ""
+		if r.Completeness.EpochBounded {
+			note = fmt.Sprintf(" (since install %s; %d earlier commits outside the observer's remit)",
+				r.Completeness.Since.Format("2006-01-02"), r.Completeness.PreEpoch)
+		}
+		fmt.Fprintf(&b, "| observer completeness | %s%s | %d commits |\n",
 			rate(r.Completeness.Observed, r.Completeness.Reachable, "commits observed"),
-			r.Completeness.Reachable)
+			note, r.Completeness.Reachable)
 	}
 
 	if len(r.Decisions) > 0 {

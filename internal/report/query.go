@@ -211,23 +211,50 @@ attributed_pairs AS (
 
 // QueryDecisions is §D5.2.
 //
+// The population is every decision with *any* activity in the period — packed
+// into a session, or scope-matched by a commit — not only those with an
+// attributed pair. §D4 is explicit that both columns are shown, and that
+// "hiding unattributed matches would overstate how much of the repo's activity
+// flows through packed sessions". Driving the table from `attributed_pairs`
+// did exactly that: a decision packed 41 times whose scope is only ever
+// touched by human commits outside any window has `packed 41, matched 12,
+// attributed 0` — the most informative row in the report — and it was omitted
+// entirely, taking §D6.2's drill-down with it, because a row that is never
+// rendered cannot be drilled (F40). The bias ran in the product's favour,
+// which is the direction §D6 can least afford.
+//
 // Counts are over distinct `patch_id`, never distinct SHA (§D0's
 // multi-attribution rule): one rebase of a feature branch would otherwise
 // double every conform count, which an auditor finds in minutes.
 func QueryDecisions(db *sql.DB, opts Options) ([]DecisionRow, error) {
 	opts.applyDefaults()
-	q := attributedPairsSQL(opts.GraceMinutes) + `
-SELECT ap.decision_id,
+	q := attributedPairsSQL(opts.GraceMinutes) + `,
+population AS (
+    SELECT DISTINCT p.decision_id AS decision_id
+      FROM events p
+     WHERE p.kind = 'pack.item' AND p.decision_id IS NOT NULL
+       AND (p.agent IS NULL OR p.agent <> 'cli')
+       AND p.ts >= :from AND p.ts < :to
+    UNION
+    SELECT DISTINCT sm.decision_id
+      FROM events sm
+      JOIN events od ON od.kind = 'diff.observed' AND od.commit_sha = sm.commit_sha
+     WHERE sm.kind = 'diff.scope_match' AND sm.decision_id IS NOT NULL
+       AND json_extract(sm.payload, '$.backfill') IS NULL
+       AND json_extract(od.payload, '$.committed_at') >= :from
+       AND json_extract(od.payload, '$.committed_at') <  :to
+)
+SELECT pop.decision_id,
        COALESCE(dec.title, '(purged or missing)'),
        COALESCE(dec.status, '?'),
        (SELECT COUNT(DISTINCT pi.session_id) FROM events pi
-         WHERE pi.kind = 'pack.item' AND pi.decision_id = ap.decision_id
+         WHERE pi.kind = 'pack.item' AND pi.decision_id = pop.decision_id
            AND (pi.agent IS NULL OR pi.agent <> 'cli')
            AND pi.ts >= :from AND pi.ts < :to),
        (SELECT COUNT(DISTINCT COALESCE(NULLIF(json_extract(od.payload, '$.patch_id'), ''), sm.commit_sha))
           FROM events sm
           JOIN events od ON od.kind = 'diff.observed' AND od.commit_sha = sm.commit_sha
-         WHERE sm.kind = 'diff.scope_match' AND sm.decision_id = ap.decision_id
+         WHERE sm.kind = 'diff.scope_match' AND sm.decision_id = pop.decision_id
            AND json_extract(sm.payload, '$.backfill') IS NULL
            AND json_extract(od.payload, '$.committed_at') >= :from
            AND json_extract(od.payload, '$.committed_at') <  :to),
@@ -235,18 +262,19 @@ SELECT ap.decision_id,
        COUNT(DISTINCT CASE WHEN ap.verdict = 'conform' THEN ap.patch_id END),
        COUNT(DISTINCT CASE WHEN ap.verdict = 'violate' THEN ap.patch_id END),
        (SELECT COUNT(DISTINCT v.commit_sha) FROM events v
-         WHERE v.kind = 'decision.violated' AND v.decision_id = ap.decision_id
+         WHERE v.kind = 'decision.violated' AND v.decision_id = pop.decision_id
            AND EXISTS (SELECT 1 FROM events r
                         WHERE r.kind = 'revert.detected'
                           AND json_extract(r.payload, '$.reverts_sha') = v.commit_sha)),
        (SELECT COUNT(*) > 0 FROM events dr
-         WHERE dr.kind = 'decision.reverted' AND dr.decision_id = ap.decision_id
+         WHERE dr.kind = 'decision.reverted' AND dr.decision_id = pop.decision_id
            AND dr.ts >= :from AND dr.ts < :to)
-  FROM attributed_pairs ap
-  LEFT JOIN decisions dec ON dec.id = ap.decision_id
- GROUP BY ap.decision_id
+  FROM population pop
+  LEFT JOIN attributed_pairs ap ON ap.decision_id = pop.decision_id
+  LEFT JOIN decisions dec ON dec.id = pop.decision_id
+ GROUP BY pop.decision_id
  ORDER BY COUNT(DISTINCT CASE WHEN ap.verdict = 'violate' THEN ap.patch_id END) DESC,
-          COUNT(DISTINCT ap.patch_id) DESC, ap.decision_id`
+          COUNT(DISTINCT ap.patch_id) DESC, pop.decision_id`
 
 	rows, err := db.Query(q, sql.Named("from", opts.fromStr()), sql.Named("to", opts.toStr()))
 	if err != nil {
@@ -415,4 +443,27 @@ func ScopedDecisionCount(db *sql.DB) (int, error) {
 		SELECT COUNT(*) FROM decisions
 		 WHERE status IN ('active','violated') AND json_array_length(scope) > 0`).Scan(&n)
 	return n, err
+}
+
+// ObserverEpoch reads the observation epoch (§D1.3) from the event log.
+//
+// The report needs it for §D4.4's denominator: commits older than the epoch
+// are ones the observer was never allowed to see, and counting them measures
+// the repository's age rather than the observer's health.
+func ObserverEpoch(db *sql.DB) (*time.Time, error) {
+	var raw string
+	err := db.QueryRow(`
+		SELECT json_extract(payload, '$.epoch') FROM events
+		 WHERE kind = 'observer.enabled' ORDER BY seq LIMIT 1`).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading observation epoch: %w", err)
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, nil
+	}
+	return &t, nil
 }

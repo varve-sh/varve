@@ -3,6 +3,8 @@ package report
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -616,6 +618,63 @@ func TestCompleteness_IsAnIntersectionAndCannotExceed100(t *testing.T) {
 	}
 }
 
+// gitRepo is a throwaway repository for the completeness tests, which need a
+// real `git rev-list` denominator.
+type gitRepo struct {
+	t    *testing.T
+	root string
+}
+
+func newGitRepo(t *testing.T) *gitRepo {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &gitRepo{t: t, root: root}
+	for _, args := range [][]string{
+		{"init", "--initial-branch=main"},
+		{"config", "user.email", "d@e.com"},
+		{"config", "user.name", "Dev"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return r
+}
+
+func (r *gitRepo) commit(msg string, at time.Time) string {
+	r.t.Helper()
+	name := fmt.Sprintf("f%d.txt", at.UnixNano())
+	if err := os.WriteFile(filepath.Join(r.root, name), []byte(msg), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+	add := exec.Command("git", "add", "-A")
+	add.Dir = r.root
+	if out, err := add.CombinedOutput(); err != nil {
+		r.t.Fatalf("git add: %v\n%s", err, out)
+	}
+	c := exec.Command("git", "commit", "-m", msg)
+	c.Dir = r.root
+	stamp := at.UTC().Format(time.RFC3339)
+	c.Env = append(os.Environ(), "GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
+	if out, err := c.CombinedOutput(); err != nil {
+		r.t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	out, err := exec.Command("git", "-C", r.root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func mustBuild(t *testing.T, f *fixture) *Report {
 	t.Helper()
 	r, err := Build(f.db, Options{From: f.base.Add(-time.Hour), To: f.base.Add(24 * time.Hour)})
@@ -674,9 +733,11 @@ func TestQueryPlans_UseIndexesNotTableScans(t *testing.T) {
 	}
 }
 
-// The measured numbers the brief asks for: the coverage query's output on a
-// seeded store, and the report's latency over a realistic history.
-func TestReport_LatencyOverRealisticHistory(t *testing.T) {
+// ADR-0001 falsifier 6's line is ~100 ms for hot attribution queries, and this
+// is the query a pilot runs. The guard is the falsifier's number, not a number
+// chosen to pass: a tripwire calibrated above the thing it watches for is not
+// a tripwire (F41).
+func TestReport_LatencyAtCurrentVolume(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds a few thousand events")
 	}
@@ -699,10 +760,7 @@ func TestReport_LatencyOverRealisticHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events int
-	if err := f.db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&events); err != nil {
-		t.Fatal(err)
-	}
+	events := countEvents(t, f)
 	t.Logf("history: %d sessions, %d commits, %d events", sessions, commits, events)
 	t.Logf("coverage query: %v · full report: %v", coverageElapsed, reportElapsed)
 	t.Logf("coverage: %d of %d agent sessions attributed (via pack %d, via recall %d)",
@@ -714,14 +772,73 @@ func TestReport_LatencyOverRealisticHistory(t *testing.T) {
 	if len(r.Decisions) == 0 {
 		t.Fatal("the seeded history produced no per-decision rows")
 	}
-	// ADR-0001 falsifier 6's threshold for a hot attribution query. Generous
-	// here because this is a measurement, not a benchmark: it exists to fail
-	// loudly if the report goes quadratic, not to police milliseconds.
-	if reportElapsed > 2*time.Second {
-		t.Errorf("the full report took %v over %d events — falsifier 6's promotion "+
-			"of committed_at/verdict to real columns is the pre-registered fix",
-			reportElapsed, events)
+	if coverageElapsed > 100*time.Millisecond {
+		t.Errorf("the coverage query took %v over %d events — ADR-0001 falsifier 6's "+
+			"line is ~100ms, and §D7 pre-registers the fix (promote committed_at and "+
+			"verdict to indexed columns)", coverageElapsed, events)
 	}
+}
+
+// The scaling curve, measured rather than asserted, because what it shows is
+// already known and is not a regression: at ADR-0001's own projected volume of
+// 10–15k events per *month*, the coverage query passes falsifier 6's ~100ms
+// line by an order of magnitude.
+//
+// The pre-registered fix (§D7: promote committed_at and verdict to real
+// indexed columns through the migration framework) is ADR-0001's to trigger,
+// not this package's to add — escalated in planning/decisions-log.md. Until it
+// lands, this test's job is to keep the numbers in front of whoever reads the
+// suite, and to fail if the curve gets materially worse than what was
+// measured and reported.
+func TestReport_ScalingCurveAtProjectedMonthlyVolume(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds ~16k events")
+	}
+	f := newFixture(t)
+	seedRealisticHistory(t, f, 1200, 800)
+	events := countEvents(t, f)
+
+	start := time.Now()
+	if _, err := QueryCoverage(f.db, Options{
+		From: f.base.Add(-time.Hour), To: f.base.Add(90 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	coverageElapsed := time.Since(start)
+
+	start = time.Now()
+	if _, err := Build(f.db, Options{
+		From: f.base.Add(-time.Hour), To: f.base.Add(90 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reportElapsed := time.Since(start)
+
+	t.Logf("at %d events (≈one month of ADR-0001's projected volume): "+
+		"coverage %v · full report %v", events, coverageElapsed, reportElapsed)
+	t.Logf("falsifier 6's line is ~100ms; the pre-registered fix is §D7's column " +
+		"promotion, escalated to ADR-0001 rather than added here")
+
+	// A regression bound, explicitly not a target. Measured 2026-07-29 on an
+	// M4 Pro at ~7.9k events: coverage 1.2s, full report 1.7s — both an order
+	// of magnitude over falsifier 6's line, which is the finding, not the
+	// assertion. This fails only if the curve gets materially worse than what
+	// is recorded here, which would mean something beyond the known
+	// json_extract cost regressed.
+	if reportElapsed > 6*time.Second {
+		t.Errorf("the full report took %v over %d events — materially worse than the "+
+			"recorded curve (1.7s at 7.9k events), so something beyond the known "+
+			"json_extract cost has regressed", reportElapsed, events)
+	}
+}
+
+func countEvents(t *testing.T, f *fixture) int {
+	t.Helper()
+	var n int
+	if err := f.db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // seedRealisticHistory builds a store shaped like a month of real use:
@@ -763,4 +880,111 @@ func seedRealisticHistory(t *testing.T, f *fixture, sessions, commits int) (int,
 		}
 	}
 	return sessions, commits
+}
+
+// F39. §D4.4 is the one self-critical number on the artifact a team lead
+// forwards, and it must measure whether the observer *missed* commits — not
+// how old the repository is. Commits before the epoch are ones §D1.3 forbids
+// observing, so counting them made a correct observer report "1 of 13 (8%)"
+// on day one, improving only if you backfilled.
+func TestCompleteness_ExcludesCommitsTheObserverWasNeverAllowedToSee(t *testing.T) {
+	f := newFixture(t)
+	repo := newGitRepo(t)
+
+	// Twelve commits before the store existed, one after.
+	for i := 0; i < 12; i++ {
+		repo.commit(fmt.Sprintf("old %d", i), f.base.Add(-time.Duration(48-i)*time.Hour))
+	}
+	epoch := f.base.Add(-time.Hour)
+	after := repo.commit("after install", f.base.Add(time.Minute))
+	f.observe(after, f.base.Add(time.Minute), []string{"internal/auth/x.go"}, "")
+
+	r, err := Build(f.db, Options{
+		From: f.base.Add(-72 * time.Hour), To: f.base.Add(24 * time.Hour),
+		RepoRoot: repo.root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := r.Completeness
+	if !c.Available {
+		t.Fatal("completeness must be measurable in a git repository")
+	}
+	if c.Reachable != 1 || c.Observed != 1 {
+		t.Errorf("completeness = %d of %d, want 1 of 1 — the twelve pre-epoch commits "+
+			"are outside the observer's remit, not missed by it", c.Observed, c.Reachable)
+	}
+	if !c.EpochBounded || c.PreEpoch != 12 {
+		t.Errorf("the report must name the excluded commits, not hide them: %+v", c)
+	}
+	if !c.Since.After(epoch.Add(-time.Minute)) {
+		t.Errorf("since = %s, want the epoch", c.Since)
+	}
+
+	out := r.Text()
+	if !strings.Contains(out, "1 of 1") {
+		t.Errorf("rendered completeness is still counting history:\n%s", out)
+	}
+	if !strings.Contains(out, "since install") || !strings.Contains(out, "12 earlier commits") {
+		t.Errorf("the bound must be stated on the report, not implied:\n%s", out)
+	}
+}
+
+// F40. §D4: "Both are shown … Hiding unattributed matches would overstate how
+// much of the repo's activity flows through packed sessions." The row where
+// the columns diverge is the most informative one in the report, and driving
+// the table from attributed_pairs deleted exactly those rows — biasing in the
+// product's favour, and taking §D6.2's drill-down with it.
+func TestReport_ShowsDecisionsWithNoAttributedPairs(t *testing.T) {
+	f := newFixture(t)
+	packedOnly := f.decision("Packed but never touched", "internal/never/**")
+	matchedOnly := f.decision("Touched only outside sessions", "internal/human/**")
+	both := f.decision("The ordinary case", "internal/auth/**")
+
+	// Packed into a session that produced no commit at all.
+	f.session("mcp", f.base, packedOnly.ID)
+	// A human commit in scope, outside any session window.
+	f.observe("human-commit", f.base.Add(10*time.Hour), []string{"internal/human/x.go"}, "")
+	// The full chain, for contrast.
+	f.session("mcp", f.base.Add(time.Hour), both.ID)
+	f.observe("agent-commit", f.base.Add(time.Hour).Add(time.Minute),
+		[]string{"internal/auth/x.go"}, "")
+
+	r, err := Build(f.db, Options{From: f.base.Add(-time.Hour), To: f.base.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]DecisionRow{}
+	for _, d := range r.Decisions {
+		rows[d.DecisionID] = d
+	}
+
+	packed, ok := rows[packedOnly.ID]
+	if !ok {
+		t.Fatalf("a decision packed into a session is missing from the table:\n%s", r.Text())
+	}
+	if packed.PackedSessions != 1 || packed.MatchedChanges != 0 || packed.Attributed != 0 {
+		t.Errorf("packed-only row = %+v, want packed 1 / matched 0 / attributed 0", packed)
+	}
+
+	matched, ok := rows[matchedOnly.ID]
+	if !ok {
+		t.Fatalf("a decision whose scope was touched outside any window is missing — "+
+			"that omission overstates how much activity flows through packed sessions:\n%s",
+			r.Text())
+	}
+	if matched.MatchedChanges != 1 || matched.Attributed != 0 {
+		t.Errorf("matched-only row = %+v, want matched 1 / attributed 0", matched)
+	}
+
+	full := rows[both.ID]
+	if full.Attributed != 1 || full.Conformed != 1 {
+		t.Errorf("the attributed row = %+v, want attributed 1 / conform 1", full)
+	}
+
+	// And the unflattering rows are drillable, which is the half §D6.2 lost.
+	events, err := QueryRaw(f.db, matchedOnly.ID, []string{"human-commit"})
+	if err != nil || len(events) == 0 {
+		t.Fatalf("the unattributed row does not drill down: %d events (%v)", len(events), err)
+	}
 }

@@ -368,3 +368,101 @@ func TestObserverEpoch_IsWrittenOnceAndReadBack(t *testing.T) {
 		t.Errorf("observer.enabled events = %d, want 1", len(evs))
 	}
 }
+
+// F42. §D1.3's flag marks the provenance of the *verdict* — a judgement about
+// a commit that predates the store — not the route by which the observation
+// was requested. `observe --commit <pre-epoch-sha>` honours the request and
+// still marks what it produces, or the archaeology enters the headline
+// numbers unlabelled.
+func TestObserveCommit_MarksPreEpochVerdictsHoweverTheyWereRequested(t *testing.T) {
+	k := packKernel(t)
+	epoch := time.Now().UTC().Add(-24 * time.Hour)
+	if err := k.RecordObserverEnabled(epoch); err != nil {
+		t.Fatal(err)
+	}
+	// A migrated decision: the only population whose decided_at can predate a
+	// pre-epoch commit, and therefore the only one for which this matters.
+	// Inserted the way the migration does — directly, with an old decided_at
+	// and a scope — because the content freeze rightly refuses to let an
+	// accepted decision be edited into this shape.
+	old := epoch.Add(-72 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := k.Decisions().DB().Exec(`
+		INSERT INTO decisions (id, project_id, kind, title, body, status, scope, confidence,
+		    source, tags, supersedes, created_at, updated_at, decided_at, status_changed_at,
+		    access_count)
+		VALUES ('01MIGRATEDSCOPED0000000000', ?, 'decision', 'Everything under internal', '',
+		    'active', '["internal/**"]', 1.0, 'import', '[]', '[]', ?, ?, ?, ?, 0)`,
+		testProject, old, old, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Observed directly, as the CLI does — not through a backfill scan.
+	res, err := k.ObserveCommit(observedCommit("preepoch1", epoch.Add(-time.Hour),
+		"internal/auth/x.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matched != 1 {
+		t.Fatalf("result = %+v, want the match (the request is honoured)", res)
+	}
+	matches, _ := k.Decisions().Events(EventFilter{Kind: types.EventDiffScopeMatch})
+	if len(matches) != 1 {
+		t.Fatalf("matches = %d", len(matches))
+	}
+	if matches[0].Payload["backfill"] != true {
+		t.Errorf("a verdict about a pre-epoch commit is unflagged (%v) — it would count "+
+			"in matched_changes and, with any session linkage, in the headline numbers",
+			matches[0].Payload["backfill"])
+	}
+
+	// A post-epoch commit is untouched by the rule.
+	if _, err := k.ObserveCommit(observedCommit("postepoch1", time.Now().UTC(),
+		"internal/auth/y.go")); err != nil {
+		t.Fatal(err)
+	}
+	matches, _ = k.Decisions().Events(EventFilter{Kind: types.EventDiffScopeMatch})
+	for _, m := range matches {
+		if m.CommitSHA == "postepoch1" && m.Payload["backfill"] == true {
+			t.Error("a live observation was marked as backfill")
+		}
+	}
+}
+
+// F44. `decided_at` is RFC3339Nano and `committed_at` is second-precision, and
+// lexicographic comparison across the two is not chronological: '.' sorts
+// below 'Z', so a decision accepted *after* a commit in the same second
+// compared as before it. Same class as the §D5.1 defect.
+func TestObserveCommit_DecidedAtComparisonIsNotLexicographic(t *testing.T) {
+	k := packKernel(t)
+	// A decision accepted now, and a commit stamped a full second earlier: the
+	// decision cannot have been conformed to by it.
+	d := acceptedDecision(t, k, "Auth rule", []string{"internal/auth/**"})
+	got, err := k.Decisions().GetDecision(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DecidedAt == nil {
+		t.Fatal("no decided_at")
+	}
+	earlier := got.DecidedAt.Add(-2 * time.Second).Truncate(time.Second)
+
+	res, err := k.ObserveCommit(observedCommit("earlier1", earlier, "internal/auth/x.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matched != 0 {
+		t.Errorf("a commit made before the decision was accepted produced %d matches",
+			res.Matched)
+	}
+
+	// And a commit after it does match, so the guard is not simply refusing
+	// everything.
+	if _, err := k.ObserveCommit(observedCommit("later1",
+		got.DecidedAt.Add(2*time.Second), "internal/auth/y.go")); err != nil {
+		t.Fatal(err)
+	}
+	matches, _ := k.Decisions().Events(EventFilter{Kind: types.EventDiffScopeMatch})
+	if len(matches) != 1 || matches[0].CommitSHA != "later1" {
+		t.Errorf("matches = %+v, want exactly the later commit", matches)
+	}
+}

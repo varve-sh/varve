@@ -207,12 +207,12 @@ memtrace serve --dir /path/to/project
 
 ---
 
-## `memtrace scan`
+## `memtrace scan --stale`
 
 Checks memories that reference source files and marks them stale when those files have been deleted or modified more recently than the memory was last updated.
 
 ```bash
-memtrace scan
+memtrace scan --stale
 ```
 
 ```
@@ -222,7 +222,8 @@ memtrace scan
 2 memories marked stale (11 unchanged).
 ```
 
-Review with `memtrace list --status stale`.
+Review with `memtrace list --status stale`. Bare `memtrace scan` observes
+commits — see below.
 
 ---
 
