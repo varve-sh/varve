@@ -17,18 +17,20 @@ import (
 //   - It measures *this* schema on a synthetic corpus of the stated shape
 //     (400 notes + 100 decisions, embedder disabled, BM25 only).
 //
-//   - The v1 comparator is produced by running the same benchmark body in a
-//     worktree of the last pre-v2 commit (f135a72, one `memories` table):
+//   - The v1 comparator is produced by `scripts/bench-recall-vs-v1.sh`, which
+//     materialises a worktree of the last pre-v2 commit (f135a72, one
+//     `memories` table) and generates the v1 benchmark *from this file*, so the
+//     two sides cannot drift apart. One command, no hand-copying:
 //
-//     git worktree add /tmp/mt-v1 f135a72
-//     # copy this benchmark body in, replacing testProject with "proj-1"
-//     go test ./internal/kernel/ -run XXX -bench Recall -benchtime 100x -count 3
+//         scripts/bench-recall-vs-v1.sh [benchtime] [count]
 //
 //     Measured 2026-07-28, Apple M4 Pro, 100x x3: v1 72.0/72.3/72.6 ms/op,
 //     this tree 49.7/49.6/50.1 ms/op. No regression on this corpus — v2 is
 //     faster, because the recall path's cost here is dominated by the write
 //     transactions (access tracking, recall.served), not by the FTS merge.
-//
+//     (The reviewer checked the obvious confound: removing the DSN's
+//     synchronous(NORMAL), which the v1 tree does not set, moves this side by
+//     <1%. Not an fsync artefact.)
 //   - It is still NOT the falsifier's test, which names "the founder's own DB".
 //     A synthetic corpus cannot stand in for one, so the clause is recorded in
 //     planning/decisions-log.md as unfalsified with a reproducible harness,
