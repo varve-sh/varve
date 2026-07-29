@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -233,5 +234,65 @@ func TestProbeRules_CountsWithoutImporting(t *testing.T) {
 	probes := ProbeRules(root)
 	if len(probes) != 1 || probes[0].Count != 2 || probes[0].Detail != "2 blocks" {
 		t.Fatalf("probe = %+v", probes)
+	}
+}
+
+// F47: `varve init` writes its own instruction section into CLAUDE.md, so the
+// first import on a real repo always contains it. Proposing our own boilerplate
+// as a project convention is a category error, and it lands in the first
+// section of the artifact a stranger reads.
+func TestImportRulesFile_SkipsToolInstructionBlock(t *testing.T) {
+	root := t.TempDir()
+	body := "# Style\n\nUse tabs.\n\n" +
+		"## memtrace (memory)\n\nUse memory_recall before every task. memory_save persists decisions.\n\n" +
+		"## memtrace\n\nOur own note about how we use memtrace on this team.\n"
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ImportRulesFile(root, "CLAUDE.md", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 blocks (the tool's own section skipped), got %d: %+v", len(got), got)
+	}
+	for _, c := range got {
+		if strings.Contains(c.Content, "memory_recall before every task") {
+			t.Fatalf("the tool's own instruction block was imported: %+v", c)
+		}
+	}
+	// A user's genuine block that merely mentions the tool is still imported —
+	// the skip matches what this tool writes, not what mentions it.
+	if !strings.Contains(got[1].Content, "how we use memtrace on this team") {
+		t.Fatalf("a user block titled memtrace was dropped: %+v", got[1])
+	}
+}
+
+// F48: identity is the heading, so editing a block's body keeps the rule's
+// identity and a human rejection survives the edit.
+func TestImportRulesFile_IdentitySurvivesBodyEdits(t *testing.T) {
+	root := t.TempDir()
+	write := func(body string) []Candidate {
+		if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := ImportRulesFile(root, "CLAUDE.md", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	before := write("# Security\n\nNever log secrets.\n")
+	after := write("# Security\n\nNever log secrets!\n")
+	if before[0].SourceRef == after[0].SourceRef {
+		t.Fatal("the idempotency key must change when the text changes")
+	}
+	if before[0].IdentityRef != after[0].IdentityRef {
+		t.Fatalf("the rule identity changed on a one-character edit: %q vs %q",
+			before[0].IdentityRef, after[0].IdentityRef)
+	}
+	renamed := write("# Secrets\n\nNever log secrets.\n")
+	if renamed[0].IdentityRef == before[0].IdentityRef {
+		t.Fatal("identity should follow the heading; renaming it is a different rule")
 	}
 }

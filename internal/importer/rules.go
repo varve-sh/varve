@@ -60,14 +60,27 @@ func ImportRulesFile(root, relPath string, asNotes bool) ([]Candidate, error) {
 	blocks := splitBlocks(string(data))
 	out := make([]Candidate, 0, len(blocks))
 	for _, b := range blocks {
+		if IsToolInstructionBlock(b.title, b.body) {
+			// F47: `varve init` writes its own agent-instruction section into
+			// CLAUDE.md, so the *first* import on a real repo always contains
+			// it. Proposing it is a category error — tool instructions are not
+			// a project convention — and accepting it would make our own
+			// boilerplate a binding rule the packer serves back. Skipping it is
+			// not a heuristic about prose: it matches the block this tool
+			// wrote, by heading and by the tool API names only it uses.
+			continue
+		}
 		c := Candidate{
 			// §D2.2: content-hashed, because these files have no stable row
 			// IDs. Editing a block retires the old ref and imports the new text
 			// as a new candidate — correct, because the text changed.
 			SourceRef: relPath + "#" + blockHash(b.body),
-			Title:     b.title,
-			Content:   b.body,
-			Tags:      []string{"rules-file"},
+			// F48: identity is the *heading*, not the text, so editing a
+			// block's body does not resurrect a rule a human rejected.
+			IdentityRef: relPath + "#title:" + blockHash(b.title),
+			Title:       b.title,
+			Content:     b.body,
+			Tags:        []string{"rules-file"},
 		}
 		if !asNotes {
 			c.AsDecision = true
@@ -118,12 +131,16 @@ func ImportCursorRules(root string, asNotes bool) ([]Candidate, []string, error)
 				scope = append(scope, g)
 			}
 		}
+		if IsToolInstructionBlock(title, body) {
+			continue
+		}
 		c := Candidate{
-			SourceRef: rel + "#" + blockHash(body),
-			Title:     title,
-			Content:   body,
-			Scope:     scope,
-			Tags:      []string{"cursor-rules"},
+			SourceRef:   rel + "#" + blockHash(body),
+			IdentityRef: rel + "#title:" + blockHash(title),
+			Title:       title,
+			Content:     body,
+			Scope:       scope,
+			Tags:        []string{"cursor-rules"},
 		}
 		if !asNotes {
 			c.AsDecision = true
@@ -132,6 +149,29 @@ func ImportCursorRules(root string, asNotes bool) ([]Candidate, []string, error)
 		out = append(out, c)
 	}
 	return out, warnings, nil
+}
+
+// IsToolInstructionBlock reports whether a rules-file block is varve's own
+// agent-instruction section rather than a project convention (F47).
+//
+// Both halves are required: the heading this tool writes, and at least one of
+// the MCP tool names only this tool's instructions use. A user's genuine block
+// titled "memtrace" that talks about their own conventions is still imported.
+func IsToolInstructionBlock(title, body string) bool {
+	t := strings.ToLower(strings.TrimSpace(title))
+	switch t {
+	case "memtrace", "memtrace (memory)", "varve", "varve (memory)",
+		"memtrace memory instructions", "varve memory instructions":
+	default:
+		return false
+	}
+	lower := strings.ToLower(body)
+	for _, marker := range []string{"memory_recall", "memory_save", "memory_pack", "memory_context"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func cursorRuleFiles(root string) []string {

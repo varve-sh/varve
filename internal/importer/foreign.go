@@ -23,13 +23,18 @@ import (
 // the CLI layer. Keeping this type free of kernel imports keeps the source
 // adapters testable without a database.
 type Candidate struct {
-	SourceRef  string
-	AsDecision bool
-	Kind       string // "decision" | "convention" — only set when AsDecision
-	Title      string
-	Content    string
-	Scope      []string
-	Tags       []string
+	SourceRef string
+	// IdentityRef is the rule identity for the never-resurrect rule (F48):
+	// coarser than SourceRef, so editing a rule's text does not offer a
+	// human-rejected rule again. Empty means "same as SourceRef", which is
+	// right for sources with stable row ids.
+	IdentityRef string
+	AsDecision  bool
+	Kind        string // "decision" | "convention" — only set when AsDecision
+	Title       string
+	Content     string
+	Scope       []string
+	Tags        []string
 }
 
 // Probe is what a source reports about itself before anything is imported: it
