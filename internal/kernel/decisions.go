@@ -735,6 +735,11 @@ type ViolationOptions struct {
 	RevertedSHA  string
 	Files        []string
 	MatchedGlobs []string
+	// Backfill marks a match produced by an explicit pre-epoch scan
+	// (ADR-0004 §D1.3). Backfilled matches are excluded from every reported
+	// metric by default: a verdict about a commit that predates the decision
+	// store is archaeology, not attribution.
+	Backfill bool
 }
 
 // MarkViolated records one violation episode: a `violate` verdict on a
@@ -777,64 +782,81 @@ func (s *DecisionStore) MarkViolated(id string, opts ViolationOptions) (bool, er
 		if err != nil {
 			return err
 		}
-		// A proposal is not binding and cannot be violated; a terminal row makes
-		// no further transitions. Checked against the matrix even when the
-		// decision is already violated, so the illegal cases stay illegal.
-		if d.Status != types.StatusViolated {
-			if err := types.CheckTransition(d.Status, types.StatusViolated); err != nil {
-				return err
-			}
-		}
+		rec, err := s.markViolatedTx(tx, d, opts)
+		recorded = rec
+		return err
+	})
+	return recorded, err
+}
 
-		// The observation. Its unique index is the episode's identity.
-		_, inserted, err := appendEventOnce(tx, EventInput{
+// markViolatedTx is MarkViolated's body, callable from a caller's transaction.
+// The diff observer needs it: ADR-0004 §D1.4 observes a commit in *one*
+// transaction, so the scope-match row, the episode event and the state change
+// commit together with the diff.observed row that justifies them.
+func (s *DecisionStore) markViolatedTx(tx *sql.Tx, d *types.Decision, opts ViolationOptions) (bool, error) {
+	// A proposal is not binding and cannot be violated; a terminal row makes
+	// no further transitions. Checked against the matrix even when the
+	// decision is already violated, so the illegal cases stay illegal.
+	if d.Status != types.StatusViolated {
+		if err := types.CheckTransition(d.Status, types.StatusViolated); err != nil {
+			return false, err
+		}
+	}
+
+	// The observation. Its unique index is the episode's identity.
+	matchPayload := map[string]any{
+		"files":         nonNilStrings(opts.Files),
+		"matched_globs": nonNilStrings(opts.MatchedGlobs),
+		"verdict":       "violate",
+	}
+	if opts.Backfill {
+		// ADR-0004 §D1.3: matches produced by an explicit pre-epoch backfill are
+		// excluded from every reported metric by default. The flag has to ride
+		// on the row, because the report cannot otherwise tell archaeology from
+		// attribution.
+		matchPayload["backfill"] = true
+	}
+	_, inserted, err := appendEventOnce(tx, EventInput{
+		ProjectID:  d.ProjectID,
+		Kind:       types.EventDiffScopeMatch,
+		Actor:      types.ActorSystem,
+		DecisionID: d.ID,
+		CommitSHA:  opts.CommitSHA,
+		Payload:    matchPayload,
+	})
+	if err != nil {
+		return false, err
+	}
+	if !inserted {
+		return false, nil // already observed: rescans are no-ops
+	}
+
+	payload := map[string]any{
+		"files":         nonNilStrings(opts.Files),
+		"matched_globs": nonNilStrings(opts.MatchedGlobs),
+	}
+	// §D7 shows reverted_sha as a SHA. An empty string is a claim about a
+	// commit that does not exist, so the key is omitted when the verdict came
+	// from a scope match rather than a revert.
+	if opts.RevertedSHA != "" {
+		payload["reverted_sha"] = opts.RevertedSHA
+	}
+
+	if d.Status == types.StatusViolated {
+		// A further episode on an already-violated decision: the event, and
+		// no state change.
+		_, err := s.emit(tx, EventInput{
 			ProjectID:  d.ProjectID,
-			Kind:       types.EventDiffScopeMatch,
+			Kind:       types.EventDecisionViolated,
 			Actor:      types.ActorSystem,
 			DecisionID: d.ID,
 			CommitSHA:  opts.CommitSHA,
-			Payload: map[string]any{
-				"files":         nonNilStrings(opts.Files),
-				"matched_globs": nonNilStrings(opts.MatchedGlobs),
-				"verdict":       "violate",
-			},
+			Payload:    payload,
 		})
-		if err != nil {
-			return err
-		}
-		if !inserted {
-			return nil // already observed: rescans are no-ops
-		}
-		recorded = true
-
-		payload := map[string]any{
-			"files":         nonNilStrings(opts.Files),
-			"matched_globs": nonNilStrings(opts.MatchedGlobs),
-		}
-		// §D7 shows reverted_sha as a SHA. An empty string is a claim about a
-		// commit that does not exist, so the key is omitted when the verdict came
-		// from a scope match rather than a revert.
-		if opts.RevertedSHA != "" {
-			payload["reverted_sha"] = opts.RevertedSHA
-		}
-
-		if d.Status == types.StatusViolated {
-			// A further episode on an already-violated decision: the event, and
-			// no state change.
-			_, err := s.emit(tx, EventInput{
-				ProjectID:  d.ProjectID,
-				Kind:       types.EventDecisionViolated,
-				Actor:      types.ActorSystem,
-				DecisionID: d.ID,
-				CommitSHA:  opts.CommitSHA,
-				Payload:    payload,
-			})
-			return err
-		}
-		return s.applyTransitionTx(tx, d, types.StatusViolated,
-			types.EventDecisionViolated, types.ActorSystem, payload, opts.CommitSHA)
-	})
-	return recorded, err
+		return true, err
+	}
+	return true, s.applyTransitionTx(tx, d, types.StatusViolated,
+		types.EventDecisionViolated, types.ActorSystem, payload, opts.CommitSHA)
 }
 
 // UnresolvedViolations counts the decision's violation episodes that have
