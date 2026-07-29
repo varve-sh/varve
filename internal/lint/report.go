@@ -116,6 +116,22 @@ func (r *Report) scoreBlock() string {
 	for _, f := range r.Lint.Corrupt {
 		fmt.Fprintf(&b, "  %s\n", f.Detail)
 	}
+	// Unscored review candidates are printed inside the score block, directly
+	// under the category they did NOT move (ADR-0005 Amendment 2). Putting them
+	// anywhere else would let a reader mistake them for a deduction, or miss
+	// them entirely — and the whole point of the split is that a prompt and an
+	// arithmetic input look different on the page.
+	if c := r.Lint.Check("L6"); c != nil && (len(c.Candidates) > 0 || len(c.Hubs) > 0) {
+		n := len(c.Candidates) + len(c.Hubs)
+		fmt.Fprintf(&b, "  %-18s %d shared-scope review candidate(s), not scored — calibration pending\n",
+			"", n)
+		for _, f := range c.Hubs {
+			fmt.Fprintf(&b, "    %s\n", f.Detail)
+		}
+		for _, f := range c.Candidates {
+			fmt.Fprintf(&b, "    %s  %s\n", f.ID, truncate(f.Detail, 80))
+		}
+	}
 	return b.String()
 }
 

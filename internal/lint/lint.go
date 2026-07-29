@@ -77,6 +77,16 @@ type Check struct {
 	NA       bool   `json:"na"`
 	NAReason string `json:"na_reason,omitempty"`
 	Misses   string `json:"misses,omitempty"`
+	// Candidates are review prompts that deliberately do NOT feed the score
+	// (ADR-0005 Amendment 2). A check may surface a structural coincidence
+	// worth a human's eye while having no calibrated claim about how often it
+	// means something — L6's shared-scope tier is exactly that. Findings are
+	// arithmetic; Candidates are prompts.
+	Candidates []Finding `json:"candidates,omitempty"`
+	// Hubs collapse a coincidence shared by many rows into one line. A glob
+	// claimed by four or more decisions describes a file everything touches,
+	// not k(k-1)/2 conflicts.
+	Hubs []Finding `json:"hubs,omitempty"`
 }
 
 // Result is the whole lint run.
@@ -112,7 +122,7 @@ func Run(db *sql.DB, opts Options) (*Result, error) {
 		// §D4 suppression rule 3: a score whose method is hidden is a score an
 		// evaluator rightly rejects.
 		"duplicates":     "exact-match only (no embeddings)",
-		"contradictions": "structural only (shared scope glob or identical title)",
+		"contradictions": "title collisions scored; shared-scope candidates listed unscored (calibration pending)",
 	}}
 
 	tree := newTreeIndex(opts.RepoRoot)
@@ -479,11 +489,27 @@ func checkL5(db *sql.DB, opts Options, res *Result, _ *treeIndex) (Check, error)
 // candidates — assign a shared topic_key or supersede", never verdicts. A
 // linter that told users which of their rules was wrong would be making
 // judgments it cannot support.
+// Two tiers, and only one of them is arithmetic (ADR-0005 Amendment 2).
+//
+// The title-collision tier scores: two non-terminal decisions with the same
+// normalized title and different bodies is a strong prior on any corpus shape.
+//
+// The shared-scope tier does NOT score. Measured on a real 80-entry store it
+// flagged 17 of 45 decisions, nine of which shared only one glob — a file many
+// decisions were *about* rather than rules that governed it. `scope` conflates
+// governing a file with concerning it, and on the population this report
+// actually runs against, every structural axis that might separate the two is
+// assigned by the import machinery rather than by the user: importers set
+// `kind` by source contract (so every CLAUDE.md block is a `convention`), D2.5
+// forbids them setting `topic_key`, and D9 makes exact-path scopes the norm.
+// Choosing an axis today is choosing which corpus shape to be wrong on, so the
+// tier reports unscored candidates until ≥3 real corpora say which axis works.
 func checkL6(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 	c := Check{ID: "L6", Name: "contradiction candidates", Scored: true,
-		Misses: "semantic contradictions between rows with different titles and scopes — not structurally detectable"}
+		Misses: "semantic contradictions between rows with different titles and scopes — not structurally detectable; " +
+			"shared-scope candidates are listed but not scored (calibration pending)"}
 	rows, err := db.Query(`
-		SELECT id, title, body, scope FROM decisions
+		SELECT id, title, body, scope, kind, COALESCE(topic_key,'') FROM decisions
 		 WHERE project_id = ? AND status IN ('proposed','active','violated')
 		 ORDER BY id`, opts.ProjectID)
 	if err != nil {
@@ -491,14 +517,14 @@ func checkL6(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 	}
 	defer rows.Close()
 	type row struct {
-		id, title, body string
-		scope           []string
+		id, title, body, kind, topicKey string
+		scope                           []string
 	}
 	var all []row
 	for rows.Next() {
 		var r row
 		var scopeJSON string
-		if err := rows.Scan(&r.id, &r.title, &r.body, &scopeJSON); err != nil {
+		if err := rows.Scan(&r.id, &r.title, &r.body, &scopeJSON, &r.kind, &r.topicKey); err != nil {
 			return c, err
 		}
 		r.scope = decodeJSONArray(scopeJSON)
@@ -509,47 +535,115 @@ func checkL6(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 	}
 	c.Checked = len(all)
 
-	affected := map[string]*Finding{}
-	note := func(a, b row, why string) {
-		f, ok := affected[a.id]
+	// Scored tier: identical titles with *differing* bodies. Identical titles
+	// with identical bodies are duplicates, and L5 already owns them — filing
+	// the same rows under two checks would deduct twice for one problem.
+	scored := map[string]*Finding{}
+	noteScored := func(a, b row) {
+		f, ok := scored[a.id]
 		if !ok {
-			f = &Finding{ID: a.id, Title: a.title}
-			affected[a.id] = f
+			f = &Finding{ID: a.id, Title: a.title, Detail: "identical title, different body"}
+			scored[a.id] = f
 		}
 		f.Related = append(f.Related, b.id)
-		if f.Detail == "" {
-			f.Detail = why
-		}
 	}
 	for i := range all {
 		for j := i + 1; j < len(all); j++ {
 			a, b := all[i], all[j]
-			if shared := sharedGlob(a.scope, b.scope); shared != "" {
-				note(a, b, "shares scope glob "+shared)
-				note(b, a, "shares scope glob "+shared)
-				continue
-			}
-			// Identical titles with *differing* bodies (§D3 L6). Identical
-			// titles with identical bodies are duplicates, and L5 already owns
-			// them — filing the same rows under two checks would deduct twice
-			// for one problem.
 			if importer.NormalizeText(a.title) == importer.NormalizeText(b.title) &&
 				importer.NormalizeText(a.body) != importer.NormalizeText(b.body) {
-				note(a, b, "identical title, different body")
-				note(b, a, "identical title, different body")
+				noteScored(a, b)
+				noteScored(b, a)
 			}
 		}
 	}
-	ids := make([]string, 0, len(affected))
-	for id := range affected {
+	ids := make([]string, 0, len(scored))
+	for id := range scored {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		c.Findings = append(c.Findings, *affected[id])
+		c.Findings = append(c.Findings, *scored[id])
+	}
+
+	// Unscored tier: shared scope globs, grouped by the glob itself so a hub
+	// is one line rather than a combinatorial fan-out.
+	byGlob := map[string][]int{}
+	for i := range all {
+		seen := map[string]bool{}
+		for _, g := range all[i].scope {
+			if g == "" || seen[g] {
+				continue
+			}
+			seen[g] = true
+			byGlob[g] = append(byGlob[g], i)
+		}
+	}
+	globs := make([]string, 0, len(byGlob))
+	for g := range byGlob {
+		globs = append(globs, g)
+	}
+	sort.Strings(globs)
+
+	type cand struct {
+		f              Finding
+		bothConvention bool
+		bothUntopiced  bool
+	}
+	var cands []cand
+	for _, g := range globs {
+		members := byGlob[g]
+		if len(members) < 2 {
+			continue
+		}
+		if len(members) >= hubShareThreshold {
+			ids := make([]string, 0, len(members))
+			for _, i := range members {
+				ids = append(ids, all[i].id)
+			}
+			c.Hubs = append(c.Hubs, Finding{
+				ID: g,
+				Detail: itoa(len(members)) + " decisions share scope " + g +
+					" — a shared-scope hub, not a conflict; curate with a shared topic_key if any of them compete",
+				Related: ids,
+			})
+			continue
+		}
+		for x := 0; x < len(members); x++ {
+			for y := x + 1; y < len(members); y++ {
+				a, b := all[members[x]], all[members[y]]
+				cands = append(cands, cand{
+					f: Finding{ID: a.id, Title: a.title,
+						Detail:  "shares scope glob " + g + " with " + b.id + " — review candidate, not a verdict",
+						Related: []string{b.id}},
+					bothConvention: a.kind == "convention" && b.kind == "convention",
+					bothUntopiced:  a.topicKey == "" && b.topicKey == "",
+				})
+			}
+		}
+	}
+	// Presentation order only — these signals rank the list a human reads;
+	// they deliberately do not gate what enters it, because on imported
+	// corpora both are assigned by the importer rather than the user.
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].bothConvention != cands[j].bothConvention {
+			return cands[i].bothConvention
+		}
+		if cands[i].bothUntopiced != cands[j].bothUntopiced {
+			return cands[i].bothUntopiced
+		}
+		return false
+	})
+	for _, cd := range cands {
+		c.Candidates = append(c.Candidates, cd.f)
 	}
 	return c, nil
 }
+
+// hubShareThreshold is the point at which sharing a glob stops being a
+// coincidence worth pairing up and starts describing the file. Presentation
+// only: nothing below it scores either.
+const hubShareThreshold = 4
 
 // topicKeyCorruption is L6's guaranteed tier. Two non-terminal decisions
 // sharing (project_id, topic_key) cannot happen — a partial unique index

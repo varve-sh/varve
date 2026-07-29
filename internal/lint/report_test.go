@@ -44,13 +44,13 @@ func TestReport_HonestyControls(t *testing.T) {
 		t.Errorf("score line hides its method:\n%s", text)
 	}
 	// The band label, never the bare number.
-	if !strings.Contains(text, "corpus health: 66 — significant rot") {
+	if !strings.Contains(text, "corpus health: 70 — needs attention") {
 		t.Errorf("score is not band-labelled:\n%s", text)
 	}
 	// Every category line prints x of n.
 	collapsed := strings.Join(strings.Fields(text), " ")
 	for _, want := range []string{"dead references 2 of 3", "duplicates 4 of 14",
-		"contradictions 2 of 9", "staleness 2 of 14", "hygiene 2 of 7"} {
+		"contradictions 0 of 9", "staleness 2 of 14", "hygiene 2 of 7"} {
 		if !strings.Contains(collapsed, want) {
 			t.Errorf("missing category line %q:\n%s", want, text)
 		}
@@ -84,7 +84,7 @@ func TestReport_JSONCarriesRowIDsForEveryFinding(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(raw, `"value": 66`) {
+	if !strings.Contains(raw, `"value": 70`) {
 		t.Errorf("json score does not match the text score")
 	}
 }
@@ -97,7 +97,7 @@ func TestReport_SuppressedScoreStillPrintsFindings(t *testing.T) {
 	if !strings.Contains(text, "not scored — corpus too small to score") {
 		t.Errorf("suppressed score not explained:\n%s", text)
 	}
-	if strings.Contains(text, "corpus health: 66") {
+	if strings.Contains(text, "corpus health: 70") {
 		t.Errorf("suppressed report printed a number:\n%s", text)
 	}
 	if !strings.Contains(r.Markdown(), "L5 — duplicates") {

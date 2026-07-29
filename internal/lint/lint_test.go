@@ -198,9 +198,14 @@ func TestLint_FixtureCorpus_KnownAnswers(t *testing.T) {
 	assertCheck(t, res, "L4", 2, 6, "d1", "d2")
 	// L5: 14 entries scanned; two exact groups of two — every member is a finding.
 	assertCheck(t, res, "L5", 4, 14, "d5", "d6", "n1", "n2")
-	// L6: d7 and d8 share internal/api/*.go. d5/d6 share a title *and* a body,
-	// so they are duplicates (L5) and must not be double-counted here.
-	assertCheck(t, res, "L6", 2, 9, "d7", "d8")
+	// L6 scores title collisions only (ADR-0005 Amendment 2). d7 and d8 share
+	// internal/api/*.go, which is now an unscored review candidate; d5/d6 share
+	// a title *and* a body, so they are duplicates (L5) and must not be
+	// double-counted here. Nothing in the fixture is a title collision.
+	assertCheck(t, res, "L6", 0, 9)
+	if c := mustCheck(t, res, "L6"); len(c.Candidates) != 1 || c.Candidates[0].ID != "d7" {
+		t.Errorf("L6 candidates = %+v, want one unscored d7/d8 shared-glob pair", c.Candidates)
+	}
 	// L7: 14 entries; d10 (200d, all scoped files newer) and n3 (200d).
 	assertCheck(t, res, "L7", 2, 14, "d10", "n3")
 	// L10: 7 decision-kind non-terminal rows; d3 unscoped, d4 repo-wide.
@@ -226,11 +231,13 @@ func TestLint_FixtureCorpus_KnownAnswers(t *testing.T) {
 //
 //	dead refs      2 of 3   rate .666667 × .25 = .1666667
 //	duplicates     4 of 14  rate .285714 × .25 = .0714286
-//	contradictions 2 of 9   rate .222222 × .20 = .0444444
+//	contradictions 0 of 9   rate 0        × .20 = 0
+//	  (d7/d8 share internal/api/*.go — an unscored review candidate under
+//	   ADR-0005 Amendment 2, not a deduction; no title collisions in the fixture)
 //	staleness      2 of 14  rate .142857 × .20 = .0285714
 //	hygiene        2 of 7   rate .285714 × .10 = .0285714
-//	                             Σ penalty     = .3396825
-//	score = round(100 × (1 − .3396825)) = round(66.03) = 66 → significant rot
+//	                             Σ penalty     = .2952381
+//	score = round(100 × (1 − .2952381)) = round(70.48) = 70 → needs attention
 func TestScore_FixtureCorpus_HandComputed(t *testing.T) {
 	db, root := fixture(t)
 	res, err := Run(db, fixtureOptions(root))
@@ -241,11 +248,11 @@ func TestScore_FixtureCorpus_HandComputed(t *testing.T) {
 	if s.Suppressed {
 		t.Fatalf("14 entries is above the n=%d floor; score should not be suppressed", MinScorableEntries)
 	}
-	if s.Value != 66 || s.Band != "significant rot" {
-		t.Fatalf("score = %d (%s), want 66 (significant rot)", s.Value, s.Band)
+	if s.Value != 70 || s.Band != "needs attention" {
+		t.Fatalf("score = %d (%s), want 70 (needs attention)", s.Value, s.Band)
 	}
 	want := map[string][2]int{
-		"dead_refs": {2, 3}, "duplicates": {4, 14}, "contradictions": {2, 9},
+		"dead_refs": {2, 3}, "duplicates": {4, 14}, "contradictions": {0, 9},
 		"staleness": {2, 14}, "hygiene": {2, 7},
 	}
 	for _, c := range s.Categories {
@@ -263,7 +270,7 @@ func TestScore_FixtureCorpus_HandComputed(t *testing.T) {
 	for _, c := range s.Categories {
 		sum += c.Deduction
 	}
-	if got := 100 - sum; got < 66.0 || got > 66.1 {
+	if got := 100 - sum; got < 70.4 || got > 70.6 {
 		t.Errorf("deductions sum to %.4f, which does not reconstruct the score", sum)
 	}
 }
@@ -274,13 +281,13 @@ func TestScore_FixtureCorpus_HandComputed(t *testing.T) {
 //
 //	applicable weights: .25 + .20 + .20 + .10 = .75
 //	duplicates     4 of 14  .285714 × (.25/.75 = .333333) = .0952381
-//	contradictions 2 of 9   .222222 × (.20/.75 = .266667) = .0592593
+//	contradictions 0 of 9   0       × (.20/.75 = .266667) = 0
 //	staleness      1 of 14  .071429 × .266667              = .0190476
 //	  (only n3: without a working tree, L7's scoped-files clause cannot be
 //	   satisfied for d10, so it is not counted stale)
 //	hygiene        2 of 7   .285714 × (.10/.75 = .133333) = .0380952
-//	                              Σ penalty              = .2116402
-//	score = round(100 × .7883598) = 79 → needs attention
+//	                              Σ penalty              = .1523809
+//	score = round(100 × .8476191) = 85 → needs attention
 func TestScore_RenormalizesAroundNACategory(t *testing.T) {
 	db, _ := fixture(t)
 	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
@@ -290,8 +297,8 @@ func TestScore_RenormalizesAroundNACategory(t *testing.T) {
 	if c := mustCheck(t, res, "L3"); !c.NA {
 		t.Fatalf("dead references should be N/A with no repo present, got %+v", c)
 	}
-	if res.Score.Value != 79 || res.Score.Band != "needs attention" {
-		t.Fatalf("score = %d (%s), want 79 (needs attention)", res.Score.Value, res.Score.Band)
+	if res.Score.Value != 85 || res.Score.Band != "needs attention" {
+		t.Fatalf("score = %d (%s), want 85 (needs attention)", res.Score.Value, res.Score.Band)
 	}
 	for _, c := range res.Score.Categories {
 		if c.Key == "dead_refs" && (!c.NA || c.Deduction != 0) {
@@ -511,5 +518,129 @@ func TestL3_NoCommitsIsNotAFindingOfDeadCommits(t *testing.T) {
 	}
 	if res.Modes["dead_refs"] == "" {
 		t.Fatal("the commit tier was skipped without disclosing it on the method line")
+	}
+}
+
+// ADR-0005 Amendment 2's required fixture cases. The scope-glob tier left the
+// scored categories because on the population this report runs against —
+// imported corpora — every structural axis that might separate competing rules
+// from decisions merely *about* a file is assigned by the importer rather than
+// the user. These four cases pin both sides of the boundary so a future
+// re-entry has to move them deliberately.
+func amendment2Store(t *testing.T) *sql.DB {
+	t.Helper()
+	k := kernel.New(filepath.Join(t.TempDir(), "a2.db"), project)
+	if err := k.Open(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k.Close() })
+	return k.Decisions().DB()
+}
+
+func insertDecision(t *testing.T, db *sql.DB, id, kind, title, body, scope string) {
+	t.Helper()
+	now := ts(time.Now().UTC())
+	_, err := db.Exec(`INSERT INTO decisions
+		(id, project_id, kind, title, body, status, scope,
+		 created_at, updated_at, decided_at, status_changed_at)
+		VALUES (?,?,?,?,?, 'active', ?,?,?,?,?)`,
+		id, project, kind, title, body, scope, now, now, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Nine sharers: one hub line, zero deduction. This is the shape measured on the
+// real 80-entry store — decisions *about* one document, not rules governing it.
+func TestL6_NineSharersCollapseToAHubAndCostNothing(t *testing.T) {
+	db := amendment2Store(t)
+	for i := 0; i < 9; i++ {
+		insertDecision(t, db, "h"+itoa(i), "decision",
+			"Fact about the log "+itoa(i), "body "+itoa(i), `["planning/decisions-log.md"]`)
+	}
+	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := mustCheck(t, res, "L6")
+	if len(c.Findings) != 0 {
+		t.Errorf("nine sharers produced %d scored findings, want 0 — a hub is not a conflict", len(c.Findings))
+	}
+	if len(c.Hubs) != 1 || len(c.Hubs[0].Related) != 9 {
+		t.Fatalf("hubs = %+v, want one line naming all nine sharers", c.Hubs)
+	}
+	if len(c.Candidates) != 0 {
+		t.Errorf("a hub must not also fan out into %d pairs", len(c.Candidates))
+	}
+	for _, cat := range res.Score.Categories {
+		if cat.Key == "contradictions" && cat.Deduction != 0 {
+			t.Errorf("shared scope deducted %.4f; Amendment 2 removed it from the score", cat.Deduction)
+		}
+	}
+}
+
+// Three file-fact sharers: unscored candidates, zero deduction. Below the hub
+// threshold, so the pairs are listed — but listing is not arithmetic.
+func TestL6_ThreeSharersAreUnscoredCandidates(t *testing.T) {
+	db := amendment2Store(t)
+	for i := 0; i < 3; i++ {
+		insertDecision(t, db, "s"+itoa(i), "decision",
+			"Note on the spec "+itoa(i), "body "+itoa(i), `["docs/spec.md"]`)
+	}
+	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := mustCheck(t, res, "L6")
+	if len(c.Findings) != 0 {
+		t.Errorf("three sharers produced %d scored findings, want 0", len(c.Findings))
+	}
+	if len(c.Candidates) != 3 {
+		t.Fatalf("candidates = %+v, want the three unscored pairs", c.Candidates)
+	}
+	if len(c.Hubs) != 0 {
+		t.Errorf("three sharers is below the hub threshold, got %+v", c.Hubs)
+	}
+	for _, cat := range res.Score.Categories {
+		if cat.Key == "contradictions" && cat.Deduction != 0 {
+			t.Errorf("unscored candidates deducted %.4f", cat.Deduction)
+		}
+	}
+}
+
+// The surviving scored tier: same normalized title, different body. This one is
+// a strong prior on any corpus shape, which is why it kept the arithmetic.
+func TestL6_TitleCollisionStillScores(t *testing.T) {
+	db := amendment2Store(t)
+	insertDecision(t, db, "t1", "convention", "Use pnpm", "npm lockfiles drift", `["a/*.go"]`)
+	insertDecision(t, db, "t2", "convention", "use   PNPM", "yarn is fine actually", `["b/*.go"]`)
+	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := mustCheck(t, res, "L6")
+	if len(c.Findings) != 2 {
+		t.Fatalf("findings = %+v, want both rows of the title collision scored", c.Findings)
+	}
+	for _, f := range c.Findings {
+		if f.Detail != "identical title, different body" {
+			t.Errorf("finding %s detail = %q", f.ID, f.Detail)
+		}
+	}
+}
+
+// The method line is the disclosure that makes the split honest: a reader must
+// be able to see that shared-scope candidates exist and did not move the score.
+func TestL6_MethodLineDisclosesTheUnscoredTier(t *testing.T) {
+	db := amendment2Store(t)
+	insertDecision(t, db, "m1", "decision", "One", "a", `["x/*.go"]`)
+	insertDecision(t, db, "m2", "decision", "Two", "b", `["x/*.go"]`)
+	res, err := Run(db, Options{ProjectID: project, Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "title collisions scored; shared-scope candidates listed unscored (calibration pending)"
+	if got := res.Modes["contradictions"]; got != want {
+		t.Fatalf("method line = %q, want %q", got, want)
 	}
 }
