@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -499,4 +500,84 @@ func TestStats_CountsSessionsByTag(t *testing.T) {
 	if stats.TotalLive != 3 {
 		t.Errorf("total live = %d, want 3", stats.TotalLive)
 	}
+}
+
+// F11: a note-heavy store must not starve decisions out of the candidate pool.
+//
+// The two BM25 ranks come from separate FTS5 indexes with separate corpus
+// statistics and are not comparable. Here the query term falls outside the
+// decision's title (the body is long) so it matches one FTS column, while every
+// note matches in both `content` and `summary` — notes rank -1.375e-06,
+// decisions -1e-06. One ORDER BY over the union therefore does not order the
+// decisions lower, it deletes all three before the scorer runs. Verified: with
+// the merged cut this test returns zero decisions.
+//
+// A note-heavy store with a few decisions is the shape of every migrated v1
+// database, so the assertion is on rows surfaced through the kernel facade.
+func TestRecall_DecisionsSurviveANoteHeavyStore(t *testing.T) {
+	k := readPathKernel(t)
+
+	filler := strings.Repeat("lorem ipsum dolor sit amet consectetur adipiscing elit sed do ", 4)
+	wanted := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		d, _, err := k.Save(types.MemorySaveInput{
+			Content: fmt.Sprintf(
+				"%s %d and the rule is that every handler must check the auth header", filler, i),
+			Type:   types.MemoryTypeDecision,
+			Source: types.MemorySourceUser,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wanted[d.ID] = true
+	}
+	for i := 0; i < 200; i++ {
+		if _, _, err := k.Save(types.MemorySaveInput{
+			Content: fmt.Sprintf("auth %d", i),
+			Type:    types.MemoryTypeFact,
+			Source:  types.MemorySourceUser,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The candidate pool itself must carry both classes: this is where the
+	// damage was done, upstream of any scoring.
+	pool, err := k.Store().SearchFTS("auth", testProject, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inPool := 0
+	for _, r := range pool {
+		if wanted[r.ID] {
+			inPool++
+		}
+	}
+	if inPool != 3 {
+		t.Errorf("candidate pool holds %d of 3 matching decisions (pool size %d) — "+
+			"the class that ranks worse is being deleted, not ranked lower", inPool, len(pool))
+	}
+
+	// End to end through the kernel facade: a query the decisions match and the
+	// notes do not must surface them, i.e. the merge itself works.
+	results, err := k.Recall(types.MemoryRecallInput{Query: "handler", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	surfaced := 0
+	for _, r := range results {
+		if wanted[r.Memory.ID] {
+			surfaced++
+		}
+	}
+	if surfaced != 3 {
+		t.Errorf("recall surfaced %d of 3 matching decisions in a 200-note store", surfaced)
+	}
+
+	// Honest scope note: this fixes the *pool*. Ordering within it is the
+	// existing scorer's, which §D10 delegates ("merges via the existing
+	// scorer") and which is class-blind: on a query every note also matches,
+	// 200 notes still fill a limit-10 result. Making "an active decision in
+	// scope" outrank "a note that matched a keyword" is ADR-0002 §P3's packer,
+	// a separate read path by Phase 0 ruling 3 — not a change to recall.
 }

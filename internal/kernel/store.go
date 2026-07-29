@@ -355,12 +355,21 @@ func (s *MemoryStore) TopAccessed(projectID string, n int) ([]types.Memory, erro
 }
 
 // SearchFTS runs a full-text search across both FTS tables and returns matching
-// ids with BM25 ranks (§D10: recall searches decisions_fts *and* notes_fts).
+// ids with BM25 ranks (§D10: recall searches decisions_fts *and* notes_fts and
+// "merges via the existing scorer").
 //
-// The two ranks come from separate FTS5 indexes and are not strictly
-// comparable, which is acceptable and deliberate: the ordering here only picks
-// the candidate pool, and the scorer normalises BM25 by the largest magnitude
-// in that pool before weighting it against recency, confidence and access.
+// The limit is applied *inside each arm*, never to the merged set. The two
+// ranks come from separate FTS5 indexes and are not comparable, and BM25
+// favours short documents — notes are short, decision bodies are long — so one
+// ORDER BY over the union does not merely order decisions lower, it deletes
+// them before the scorer ever runs. Measured on 60 matching notes plus 1
+// matching decision, a merged cut of 30 returned 30 notes and no decision at
+// all, while the decision was live and listed. A note-heavy store with few
+// decisions is the shape of every migrated v1 database.
+//
+// Each class therefore contributes up to `limit` candidates and the scorer does
+// the merging, normalising BM25 within the pool before weighting it against
+// recency, confidence and access.
 func (s *MemoryStore) SearchFTS(query string, projectID string, limit int) ([]types.FTSResult, error) {
 	sanitized := sanitizeFTSQuery(query)
 	if sanitized == "" {
@@ -369,23 +378,30 @@ func (s *MemoryStore) SearchFTS(query string, projectID string, limit int) ([]ty
 
 	rows, err := s.db.Query(`
 		SELECT id, rank FROM (
-			SELECT d.id AS id, fts.rank AS rank
-			  FROM decisions_fts fts
-			  JOIN decisions d ON d.rowid = fts.rowid
-			 WHERE decisions_fts MATCH ?
-			   AND d.project_id = ?
-			   AND d.status IN `+liveDecisionStatuses+`
-			 UNION ALL
-			SELECT n.id AS id, fts.rank AS rank
-			  FROM notes_fts fts
-			  JOIN notes n ON n.rowid = fts.rowid
-			 WHERE notes_fts MATCH ?
-			   AND n.project_id = ?
-			   AND n.status = 'active'
+			SELECT * FROM (
+				SELECT d.id AS id, fts.rank AS rank
+				  FROM decisions_fts fts
+				  JOIN decisions d ON d.rowid = fts.rowid
+				 WHERE decisions_fts MATCH ?
+				   AND d.project_id = ?
+				   AND d.status IN `+liveDecisionStatuses+`
+				 ORDER BY rank
+				 LIMIT ?
+			)
+			UNION ALL
+			SELECT * FROM (
+				SELECT n.id AS id, fts.rank AS rank
+				  FROM notes_fts fts
+				  JOIN notes n ON n.rowid = fts.rowid
+				 WHERE notes_fts MATCH ?
+				   AND n.project_id = ?
+				   AND n.status = 'active'
+				 ORDER BY rank
+				 LIMIT ?
+			)
 		)
-		ORDER BY rank
-		LIMIT ?`,
-		sanitized, projectID, sanitized, projectID, limit)
+		ORDER BY rank`,
+		sanitized, projectID, limit, sanitized, projectID, limit)
 	if err != nil {
 		return nil, err
 	}
