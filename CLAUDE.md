@@ -20,22 +20,28 @@ This project has the **memtrace MCP server** connected. Use its tools for **all*
 - **User says forget/delete/remove** — call `memory_forget`.
 - **Never** write memory files manually or use built-in memory features.
 
-## How memories are governed
+## What actually happens when you call these tools
 
-- A **decision** or **convention** you save lands **`proposed`**. It does *not*
-  bind until a human accepts it with `memtrace decision accept <id>`, and it is
-  never served as binding context. It can still come back to you through
-  `memory_recall` / `memory_context`, marked **PROPOSED** — treat anything so
-  marked as a pending proposal, not as law, and say it is waiting rather than
-  assuming the save took effect. Acceptance and rejection are CLI/TUI actions —
-  there is no MCP tool for them, by design.
-- **`fact` and `event` are synonyms for `note`**: retrievable, ungoverned, no
-  lifecycle. A note cannot be edited into a decision; `memtrace decision
-  promote <note-id>` does that, and it is a human action.
-- **Forgetting a decision is not a delete.** `memory_forget` maps it onto the
-  lifecycle — a proposal is rejected, a binding decision is reverted — and the
-  audit record survives either way. Notes keep ordinary delete semantics.
-- `topic_key` behaves differently by class: re-saving a **note** under an
+- **`memory_save`** with `type=decision` or `convention` creates a row with
+  status **`proposed`**. It does not bind, and `memory_context` will not return
+  it as context. A human runs `memtrace decision accept <id>` to make it
+  binding. Say the proposal is waiting; do not report it as adopted.
+- **`memory_save`** with `type=fact` or `event` creates a **note** — `fact` and
+  `event` are synonyms for `note`: retrievable, ungoverned, no lifecycle.
+  `memory_update` cannot turn a note into a decision; `memtrace decision
+  promote <note-id>` does, and it is a human action.
+- **`memory_forget`** on a note deletes it. On a decision or convention it
+  deletes nothing and changes no status: it records a **disposal request** and
+  returns it as pending. A human confirms with `memtrace decision reject <id>`
+  while the decision is proposed, or `memtrace decision revert <id>` once it is
+  binding. Tell the user the request is waiting for them.
+- **`memory_recall`** and **`memory_get`** return proposals, marked
+  `PROPOSED`. They are the review surface — treat anything so marked as a
+  pending proposal, not as law.
+- **`memory_context`** never returns a proposal as content; it reports them as
+  a trailing count with their ids. Everything else it returns is binding or
+  ungoverned.
+- **`topic_key`** behaves differently by class: re-saving a **note** under an
   existing key updates it in place; re-saving a **decision** creates a new
   proposed successor that supersedes the current holder once accepted. The two
   namespaces are separate — a note and a decision may hold the same key.

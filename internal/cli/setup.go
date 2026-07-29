@@ -225,19 +225,27 @@ Rules:
 - User says forget/delete/remove — call memory_forget.
 - Never write memory files manually or use built-in memory features.
 
-How memories are governed:
-- A decision or convention you save lands "proposed". It does NOT bind until a
-  human accepts it with "memtrace decision accept <id>", and it is never served
-  as binding context. It can still come back to you from memory_recall or
-  memory_context, marked PROPOSED — treat anything so marked as a pending
-  proposal, not as law, and tell the user it is waiting instead of assuming
-  your save took effect.
-- fact and event are synonyms for note: retrievable, ungoverned, no lifecycle.
-  A note cannot be edited into a decision — "memtrace decision promote <id>"
-  does that, and it is a human action.
-- Forgetting a decision is not a delete. memory_forget maps it onto the
-  lifecycle: a proposal is rejected, a binding decision is reverted, and the
-  audit record survives either way.`
+What actually happens when you call these tools:
+
+- memory_save with type=decision or convention creates a row with status
+  "proposed". It does not bind, and memory_context will not return it as
+  context. A human runs "memtrace decision accept <id>" to make it binding.
+  Say that the proposal is waiting; do not report it as adopted.
+- memory_save with type=fact or event creates a note. fact and event are
+  synonyms for note: retrievable, ungoverned, no lifecycle. memory_update
+  cannot turn a note into a decision — "memtrace decision promote <id>" does
+  that, and it is a human action.
+- memory_forget on a note deletes it. memory_forget on a decision or
+  convention deletes nothing and changes no status: it records a
+  disposal request and returns it as pending. A human confirms with
+  "memtrace decision reject <id>" while the decision is proposed, or
+  "memtrace decision revert <id>" once it is binding. Tell the user the
+  request is waiting for them.
+- memory_recall and memory_get return proposals, marked PROPOSED. Treat
+  anything so marked as a pending proposal, not as law.
+- memory_context never returns a proposal as content; it reports proposals as
+  a trailing count with their ids. Everything else it returns is binding or
+  ungoverned.`
 
 // claudeMdSnippet wraps the core in a CLAUDE.md section.
 const claudeMdSnippet = "\n## memtrace (memory)\n\n" + memtraceInstructionsCore + "\n"

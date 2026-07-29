@@ -250,16 +250,16 @@ func TestSetupAgent_UnknownAgent(t *testing.T) {
 	}
 }
 
-// ADR-0002 Migration §4a, ruled immediate scope by ADR-0001 Amendment 2 (A2.4).
-// Every shipped template must state three things, because the behaviour they
-// describe changed with the Phase 2 schema port and not with the packer:
-// agent-saved decisions land proposed and do not bind; fact/event are note
-// synonyms; forget maps onto the lifecycle, never a hard delete.
+// ADR-0002 Migration §4a, as revised by ADR-0001 Amendment 3. Every shipped
+// template must state the three normative points, and this is the third time
+// the copy has moved — so it is pinned to *observable behaviour* rather than
+// to intent, and each assertion names a thing a reader can check by running
+// the tool.
 //
-// ADR-0001 falsifier 1's 30-day clock starts when this ships — measuring the
-// confirm gate against agents that were never told the rule changed measures
-// template staleness, not UX friction.
-func TestInstructionTemplates_StateTheQuarantine(t *testing.T) {
+// ADR-0001 falsifier 1's 30-day clock runs on this copy, so a template that
+// describes behaviour the product does not have measures template staleness
+// rather than UX friction.
+func TestInstructionTemplates_DescribeObservableBehaviour(t *testing.T) {
 	for _, snippet := range []struct{ name, text string }{
 		{"CLAUDE.md", claudeMdSnippet},
 		{"cursor rules", cursorRulesSnippet},
@@ -267,14 +267,31 @@ func TestInstructionTemplates_StateTheQuarantine(t *testing.T) {
 		{"windsurf", windsurfRulesSnippet},
 		{"gemini", geminiMdSnippet},
 	} {
-		for _, want := range []string{
-			"proposed",                 // (1) it does not bind until accepted
-			"memtrace decision accept", // and how a human accepts it
-			"synonyms for note",        // (2) fact/event are notes
-			"not a delete",             // (3) forget maps onto the lifecycle
+		for _, want := range []struct{ claim, text string }{
+			// (1) an agent-saved decision lands proposed and does not bind
+			{"the status a governed save lands in", `"proposed"`},
+			{"how a human makes it binding", "memtrace decision accept"},
+			// (2) fact/event are note synonyms
+			{"fact/event are notes", "synonyms for note"},
+			// (3) an agent's forget records a request — it does not dispose
+			{"forget records a request", "disposal request"},
+			{"forget changes nothing", "changes no status"},
+			{"who confirms a disposal, while proposed", "memtrace decision reject"},
+			{"who confirms a disposal, once binding", "memtrace decision revert"},
 		} {
-			if !strings.Contains(snippet.text, want) {
-				t.Errorf("%s template does not mention %q", snippet.name, want)
+			if !strings.Contains(snippet.text, want.text) {
+				t.Errorf("%s template does not state %s (missing %q)",
+					snippet.name, want.claim, want.text)
+			}
+		}
+		// The superseded claim must be gone: an agent's forget no longer
+		// rejects or reverts anything (A2.4 point 3, superseded by A3.1).
+		for _, stale := range []string{
+			"forget/delete of a decision maps to reject",
+			"never packed into context",
+		} {
+			if strings.Contains(snippet.text, stale) {
+				t.Errorf("%s template still carries superseded copy: %q", snippet.name, stale)
 			}
 		}
 	}
