@@ -3,7 +3,9 @@ package lint
 import (
 	"database/sql"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +47,11 @@ func fixture(t *testing.T) (*sql.DB, string) {
 			t.Fatal(err)
 		}
 	}
+	// A real repo with a real commit: L3's commit tier is N/A without one
+	// (Amendment 1), so a fixture that never commits would silently stop
+	// measuring the dead-reference category it claims to measure.
+	gitInit(t, root)
+
 	k := kernel.New(filepath.Join(t.TempDir(), "lint.db"), project)
 	if err := k.Open(); err != nil {
 		t.Fatal(err)
@@ -109,6 +116,23 @@ func fixture(t *testing.T) (*sql.DB, string) {
 	note("n5", "The observer uses a post-commit hook", fresh)
 
 	return db, root
+}
+
+func gitInit(t *testing.T, root string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"config", "user.email", "fixture@example.com"},
+		{"config", "user.name", "fixture"},
+		{"add", "-A"},
+		{"-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
 }
 
 func fixtureOptions(root string) Options {
@@ -461,5 +485,31 @@ func TestQueryBacklog_DisposalRequestsListedSeparately(t *testing.T) {
 	// d5 is aging too, but it belongs to the higher-signal group only.
 	if len(b.Aging) != 1 || b.Aging[0].ID != "d3" {
 		t.Fatalf("aging group = %+v, want d3 only", b.Aging)
+	}
+}
+
+// Amendment 1: a repo with no commits leaves the commit tier N/A and says so on
+// the method line, instead of reporting every commit ref as unreachable.
+func TestL3_NoCommitsIsNotAFindingOfDeadCommits(t *testing.T) {
+	db, _ := fixture(t)
+	empty := t.TempDir()
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = empty
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	res, err := Run(db, Options{ProjectID: project, RepoRoot: empty, Now: time.Now().UTC(),
+		CommitExists: GitCommitExists(empty)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := mustCheck(t, res, "L3")
+	for _, f := range c.Findings {
+		if strings.Contains(f.Detail, "unreachable commit") {
+			t.Fatalf("a repo with no commits produced a dead-commit finding: %+v", f)
+		}
+	}
+	if res.Modes["dead_refs"] == "" {
+		t.Fatal("the commit tier was skipped without disclosing it on the method line")
 	}
 }

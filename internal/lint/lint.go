@@ -285,7 +285,7 @@ func checkL2(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 	return c, rows.Err()
 }
 
-func checkL3(db *sql.DB, opts Options, _ *Result, tree *treeIndex) (Check, error) {
+func checkL3(db *sql.DB, opts Options, res *Result, tree *treeIndex) (Check, error) {
 	c := Check{ID: "L3", Name: "dead references", Scored: true,
 		Misses: "pr/url/import refs (no network), and commits that exist locally but vanished from all remotes"}
 	rows, err := db.Query(`
@@ -309,10 +309,19 @@ func checkL3(db *sql.DB, opts Options, _ *Result, tree *treeIndex) (Check, error
 	if err := rows.Err(); err != nil {
 		return c, err
 	}
+	// ADR-0005 Amendment 1: the commit tier is N/A when the repo has no commits
+	// as well as when there is no repo. A fresh `git init` resolves no object,
+	// so every commit ref would read as dead — an unreachable-commit finding
+	// that says nothing about the corpus. Disclosed on the method line rather
+	// than silently dropped.
+	commitsCheckable := opts.CommitExists != nil && opts.RepoRoot != "" && repoHasCommits(opts.RepoRoot)
+	if opts.CommitExists != nil && !commitsCheckable {
+		res.Modes["dead_refs"] = "file references only (the repo has no commits to check against)"
+	}
 	for _, r := range refs {
 		switch r.kind {
 		case "commit":
-			if opts.CommitExists == nil {
+			if !commitsCheckable {
 				continue // unchecked, so not counted in the denominator either
 			}
 			c.Checked++
@@ -972,6 +981,13 @@ func (t *treeIndex) allScopedFilesChangedSince(scope []string, touched string) b
 		}
 	}
 	return matched > 0
+}
+
+// repoHasCommits reports whether the working tree has any commit at all.
+func repoHasCommits(root string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = root
+	return cmd.Run() == nil
 }
 
 // GitCommitExists is L3's git plumbing: a commit is dead iff the object is

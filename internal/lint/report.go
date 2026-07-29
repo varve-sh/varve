@@ -71,6 +71,13 @@ func (r *Report) Text() string {
 		for _, w := range r.Import.Warnings {
 			fmt.Fprintf(&b, "warning: %s\n", w)
 		}
+		// F48, disclosed rather than hidden: rejection is remembered per rule
+		// heading, so an edit to a rejected rule's body keeps it out, but
+		// renaming its heading offers it again.
+		if r.Import.Skipped > 0 {
+			b.WriteString("skipped entries were already imported, or are rules you rejected; rejection is\n" +
+				"          remembered per rule heading, so renaming a rejected rule offers it again\n")
+		}
 		b.WriteString("\n")
 	} else {
 		fmt.Fprintf(&b, "varve lint — %s — %s\n\n", r.Repo, stamp)
