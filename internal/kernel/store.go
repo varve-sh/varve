@@ -381,6 +381,34 @@ func (s *MemoryStore) TopAccessed(projectID string, n int) ([]types.Memory, erro
 	return result, rows.Err()
 }
 
+// searchFTSQuery is kept as a const so the plan can be asserted in a test:
+// this query has a 1000x planning cliff (see the CROSS JOIN note above).
+const searchFTSQuery = `
+		SELECT id, rank FROM (
+			SELECT * FROM (
+				SELECT d.id AS id, fts.rank AS rank
+				  FROM decisions_fts fts
+				  CROSS JOIN decisions d ON d.rowid = fts.rowid
+				 WHERE decisions_fts MATCH ?
+				   AND d.project_id = ?
+				   AND d.status IN ` + liveDecisionStatuses + `
+				 ORDER BY rank
+				 LIMIT ?
+			)
+			UNION ALL
+			SELECT * FROM (
+				SELECT n.id AS id, fts.rank AS rank
+				  FROM notes_fts fts
+				  CROSS JOIN notes n ON n.rowid = fts.rowid
+				 WHERE notes_fts MATCH ?
+				   AND n.project_id = ?
+				   AND n.status = 'active'
+				 ORDER BY rank
+				 LIMIT ?
+			)
+		)
+		ORDER BY rank`
+
 // SearchFTS runs a full-text search across both FTS tables and returns matching
 // ids with BM25 ranks (§D10: recall searches decisions_fts *and* notes_fts and
 // "merges via the existing scorer").
@@ -397,37 +425,20 @@ func (s *MemoryStore) TopAccessed(projectID string, n int) ([]types.Memory, erro
 // Each class therefore contributes up to `limit` candidates and the scorer does
 // the merging, normalising BM25 within the pool before weighting it against
 // recency, confidence and access.
+//
+// CROSS JOIN is load-bearing, not style. It forces the FTS table to drive each
+// arm; SQLite otherwise plans `SEARCH decisions USING idx_decisions_project_status`
+// as the outer loop and re-runs the MATCH once per row. Measured on a
+// 5,000-decision store with a query matching every row: 5.3 s with a plain
+// JOIN, 5.5 ms with CROSS JOIN. In SQLite, CROSS JOIN constrains only the join
+// order — the result set is identical.
 func (s *MemoryStore) SearchFTS(query string, projectID string, limit int) ([]types.FTSResult, error) {
 	sanitized := sanitizeFTSQuery(query)
 	if sanitized == "" {
 		return nil, nil
 	}
 
-	rows, err := s.db.Query(`
-		SELECT id, rank FROM (
-			SELECT * FROM (
-				SELECT d.id AS id, fts.rank AS rank
-				  FROM decisions_fts fts
-				  JOIN decisions d ON d.rowid = fts.rowid
-				 WHERE decisions_fts MATCH ?
-				   AND d.project_id = ?
-				   AND d.status IN `+liveDecisionStatuses+`
-				 ORDER BY rank
-				 LIMIT ?
-			)
-			UNION ALL
-			SELECT * FROM (
-				SELECT n.id AS id, fts.rank AS rank
-				  FROM notes_fts fts
-				  JOIN notes n ON n.rowid = fts.rowid
-				 WHERE notes_fts MATCH ?
-				   AND n.project_id = ?
-				   AND n.status = 'active'
-				 ORDER BY rank
-				 LIMIT ?
-			)
-		)
-		ORDER BY rank`,
+	rows, err := s.db.Query(searchFTSQuery,
 		sanitized, projectID, limit, sanitized, projectID, limit)
 	if err != nil {
 		return nil, err
