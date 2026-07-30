@@ -819,6 +819,28 @@ func TestReport_LatencyAtCurrentVolume(t *testing.T) {
 // The bound below is therefore a *regression* bound around the measured curve,
 // and the test states the falsifier's own number in its output so nobody has
 // to read this comment to learn the guard is not the threshold.
+//
+// The bound is a RATIO, not a wall-clock ceiling (changed 2026-07-30). It was
+// `reportElapsed > 8s`, calibrated on the M4 Pro above where the report takes
+// 2.1s — 3.8x of headroom, which sounds ample and is not. A GitHub-hosted
+// 2-core runner is 3–4x slower on SQLite-heavy work (measured the same day:
+// internal/kernel 6.0s locally, 23.4s on CI), so the runner's ordinary time for
+// this test is 8–9s and the guard sat exactly on it. Four CI runs failed at
+// 8.18s, 8.22s, 8.47s and 8.93s while others passed just under, across commits
+// that touched nothing in this package — a coin flip reported as a performance
+// regression, on the check whose whole job is to tell those two apart.
+//
+// Raising the ceiling would have traded a false alarm on CI for silence where
+// it matters: at 20s, a 3x regression on the dev machine (2.1s → 6.3s) passes
+// without a word. So the primary signal is now report ÷ coverage, both measured
+// on the same machine in the same run, which cancels the hardware out —
+// recorded 1.64x, 2.10x locally, 2.28x on CI. A regression in the report path
+// beyond the known join fan-out moves that ratio on any machine.
+//
+// A ratio cannot see a regression that slows both queries equally, so the
+// wall-clock ceiling stays as a backstop, set wide enough to mean "something is
+// catastrophically wrong" on any hardware rather than "this laptop is not an M4
+// Pro". Both numbers are logged every run either way.
 func TestReport_ScalingCurveOnThePromotedSchema(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds ~16k events")
@@ -848,12 +870,35 @@ func TestReport_ScalingCurveOnThePromotedSchema(t *testing.T) {
 		"A5.4 makes that a design amendment (summary tables), not a migration",
 		falsifier6PrimeMillis, falsifier6PrimeEvents, events)
 
-	if reportElapsed > 8*time.Second {
-		t.Errorf("the full report took %v over %d events — materially worse than the "+
-			"recorded curve (2.1s at 15.6k), so something beyond the known join "+
-			"fan-out has regressed", reportElapsed, events)
+	// Hardware-independent regression signal: the report path measured against
+	// the coverage query on the same machine, in the same run.
+	ratio := reportElapsed.Seconds() / coverageElapsed.Seconds()
+	t.Logf("report is %.2fx the coverage query (recorded 1.64x on the promoted schema)", ratio)
+	if ratio > reportToCoverageCeiling {
+		t.Errorf("the full report is %.2fx the coverage query over %d events, against "+
+			"%.2fx recorded — the two move together with hardware, so this is the "+
+			"report path regressing beyond the known join fan-out, not a slow machine",
+			ratio, events, recordedReportToCoverage)
+	}
+	// Backstop for a regression that slows both queries equally, which the ratio
+	// cannot see. Wide on purpose: this asks "is something catastrophically
+	// wrong", not "is this machine as fast as the one the curve was measured on".
+	if reportElapsed > 20*time.Second {
+		t.Errorf("the full report took %v over %d events — far beyond the recorded "+
+			"curve (2.1s at 15.6k) on any hardware", reportElapsed, events)
 	}
 }
+
+const (
+	// recordedReportToCoverage is the 2026-07-29 M4 Pro measurement: 2.10s
+	// report over 1.28s coverage.
+	recordedReportToCoverage = 1.64
+	// reportToCoverageCeiling leaves room for the spread the ratio really has
+	// across machines — 1.64x recorded, 2.10x on a dev laptop, 2.28x on a
+	// 2-core CI runner — while still failing on a report path that doubles
+	// relative to coverage.
+	reportToCoverageCeiling = 3.0
+)
 
 func countEvents(t *testing.T, f *fixture) int {
 	t.Helper()
