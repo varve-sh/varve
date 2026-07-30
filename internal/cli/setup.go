@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -140,7 +141,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 			configPath = filepath.Join(projectRoot, ".claude", "mcp.json")
 		}
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "varve",
+			"command": serveCommand(),
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -154,7 +155,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 	case "cursor":
 		configPath := filepath.Join(projectRoot, ".cursor", "mcp.json")
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "varve",
+			"command": serveCommand(),
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -167,7 +168,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 		configPath := filepath.Join(projectRoot, ".vscode", "mcp.json")
 		written, err := writeMCPEntry(configPath, "servers", map[string]interface{}{
 			"type":    "stdio",
-			"command": "varve",
+			"command": serveCommand(),
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -180,7 +181,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 		configPath := filepath.Join(projectRoot, "opencode.json")
 		return writeMCPEntry(configPath, "mcp", map[string]interface{}{
 			"type":    "local",
-			"command": []string{"varve", "serve"},
+			"command": []string{serveCommand(), "serve"},
 		})
 
 	case "windsurf":
@@ -190,7 +191,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 		}
 		configPath := filepath.Join(home, ".codeium", "windsurf", "mcp_config.json")
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "varve",
+			"command": serveCommand(),
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -202,7 +203,7 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 	case "gemini":
 		configPath := filepath.Join(projectRoot, ".gemini", "settings.json")
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
-			"command": "varve",
+			"command": serveCommand(),
 			"args":    []string{"serve"},
 		})
 		if err != nil {
@@ -335,6 +336,29 @@ func appendInstructions(path, snippet string) {
 // setupNotices collects changes setup made to files the user owns, so they are
 // reported rather than discovered. Drained by the setup command.
 var setupNotices []string
+
+// serveCommand is the command an agent config should launch.
+//
+// It is the bare binary name when that resolves on PATH, and the absolute path
+// to this executable when it does not. Writing "varve" unconditionally produced
+// an MCP entry that silently failed to start for anyone whose install directory
+// is not on PATH — `go install` and `make install` both land in $GOPATH/bin,
+// which is not on PATH by default on macOS. setup reported success and the agent
+// simply had no memory tools, with nothing anywhere saying why.
+func serveCommand() string {
+	if _, err := exec.LookPath(binaryName); err == nil {
+		return binaryName
+	}
+	if self, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(self); err == nil {
+			return resolved
+		}
+		return self
+	}
+	return binaryName
+}
+
+const binaryName = "varve"
 
 // writeMCPEntry reads (or creates) the JSON config at path, merges the varve
 // entry under the given key, and writes it back. Returns false if already present.

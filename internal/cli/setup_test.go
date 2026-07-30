@@ -396,3 +396,41 @@ func TestAppendInstructions_DoesNotDuplicateAPreRenameBlock(t *testing.T) {
 		t.Errorf("a second instruction block was appended:\n%s", got)
 	}
 }
+
+// setup used to write `"command": "varve"` unconditionally. Both documented
+// install paths — `go install` and `make install` — land the binary in
+// $GOPATH/bin, which is not on PATH by default on macOS, so setup reported
+// success and produced an MCP entry that could not launch. The agent simply had
+// no memory tools and nothing said why.
+func TestServeCommand_IsLaunchableWhenTheBinaryIsNotOnPATH(t *testing.T) {
+	// An empty PATH guarantees the bare name does not resolve.
+	t.Setenv("PATH", "")
+
+	got := serveCommand()
+	if got == binaryName {
+		t.Fatalf("serveCommand() = %q with an unresolvable PATH; an agent config "+
+			"written with a bare name cannot start the server", got)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("serveCommand() = %q, want an absolute path", got)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("serveCommand() = %q, which does not exist: %v", got, err)
+	}
+}
+
+// When it does resolve, the bare name is preferred — an absolute path baked into
+// a config survives past the binary it names (a later `brew install` puts varve
+// somewhere else, and the old path keeps being launched).
+func TestServeCommand_PrefersTheBareNameWhenItResolves(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, binaryName)
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	if got := serveCommand(); got != binaryName {
+		t.Errorf("serveCommand() = %q, want the bare %q when it is on PATH", got, binaryName)
+	}
+}
