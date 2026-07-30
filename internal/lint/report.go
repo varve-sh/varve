@@ -95,10 +95,53 @@ func (r *Report) Text() string {
 	return b.String()
 }
 
+// methodLine renders every mode disclosure, not just the duplicates one.
+//
+// §D4 makes method disclosure a property of the score itself — "a score whose
+// method is hidden is a score an evaluator rightly rejects" — and two rulings
+// put specific text here: Amendment 2's unscored-tier disclosure ("the method
+// line carries it") and A1.4's "commit refs unchecked: no git history". Both
+// were being computed into Modes and rendered nowhere a reader would look,
+// because this line took one key by name.
+//
+// Ordering follows the scored categories, so the line reads in the same order
+// as the block beneath it.
+func (r *Report) methodLine() string {
+	parts := make([]string, 0, len(r.Lint.Modes))
+	for _, w := range scoreWeights {
+		if m := r.Lint.Modes[w.key]; m != "" {
+			parts = append(parts, w.label+": "+m)
+		}
+	}
+	// Anything not tied to a scored category still gets said, in a stable order.
+	rest := make([]string, 0, len(r.Lint.Modes))
+	for k, m := range r.Lint.Modes {
+		if m == "" || scoredCategory(k) {
+			continue
+		}
+		rest = append(rest, k+": "+m)
+	}
+	sort.Strings(rest)
+	parts = append(parts, rest...)
+	if len(parts) == 0 {
+		return "no disclosures"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func scoredCategory(key string) bool {
+	for _, w := range scoreWeights {
+		if w.key == key {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Report) scoreBlock() string {
 	var b strings.Builder
 	s := r.Lint.Score
-	mode := r.Lint.Modes["duplicates"]
+	mode := r.methodLine()
 	if s.Suppressed {
 		fmt.Fprintf(&b, "corpus health: not scored — %s   [n=%d entries · method: %s]\n",
 			s.Reason, s.Entries, mode)

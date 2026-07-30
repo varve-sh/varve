@@ -40,8 +40,15 @@ func TestReport_HonestyControls(t *testing.T) {
 	if !strings.Contains(text, "[n=14 entries") {
 		t.Errorf("score line has no sample size:\n%s", text)
 	}
-	if !strings.Contains(text, "method: exact-match only") {
+	if !strings.Contains(text, "method: duplicates: exact-match only") {
 		t.Errorf("score line hides its method:\n%s", text)
+	}
+	// Amendment 2 put the unscored tier's disclosure on this line specifically
+	// ("it needs its method disclosed, and the method line carries it"), and
+	// asserted it verbatim. It was computed into Modes and rendered nowhere.
+	if !strings.Contains(text,
+		"contradictions: title collisions scored; shared-scope candidates listed unscored (calibration pending)") {
+		t.Errorf("the method line does not disclose the unscored tier:\n%s", text)
 	}
 	// The band label, never the bare number.
 	if !strings.Contains(text, "corpus health: 70 — needs attention") {
