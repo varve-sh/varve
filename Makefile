@@ -16,9 +16,17 @@ lint:
 clean:
 	rm -rf bin/ dist/
 
+# Install writes a NEW file and renames it over the old one, rather than cp-ing
+# into the existing inode. On Apple Silicon, overwriting a Mach-O in place
+# invalidates the ad-hoc signature the kernel has cached for that inode, and
+# every subsequent run dies with SIGKILL — `varve --version` exits 137 with no
+# output, on a binary that runs fine from bin/. That reads as a corrupt build or
+# a broken command, not as an install-method bug. A rename gives the new binary
+# its own inode, so the fresh signature is the one that gets checked.
 install: build
 	@mkdir -p $(shell go env GOPATH)/bin
-	cp bin/$(BINARY) $(shell go env GOPATH)/bin/$(BINARY)
+	cp bin/$(BINARY) $(shell go env GOPATH)/bin/$(BINARY).new
+	mv -f $(shell go env GOPATH)/bin/$(BINARY).new $(shell go env GOPATH)/bin/$(BINARY)
 	@command -v $(BINARY) >/dev/null 2>&1 || printf '\ninstalled to %s/bin/%s, but that directory is not on your PATH.\nadd it:  export PATH="$$PATH:%s/bin"\n\n' "$(shell go env GOPATH)" "$(BINARY)" "$(shell go env GOPATH)"
 
 # One command to run before dogfooding, because dogfooding exercises the
