@@ -589,3 +589,87 @@ func TestWriteMCPEntry_LeavesACorrectEntryAlone(t *testing.T) {
 	}
 	setupNotices = nil
 }
+
+// Homebrew installs varve into a versioned Cellar directory and points a stable
+// symlink at it. serveCommand used to record the resolved target, so a config
+// written on 2.0.0 named
+//
+//	/opt/homebrew/Cellar/varve/2.0.0/bin/varve
+//
+// and the next `brew upgrade` deleted that directory. The agent then comes up
+// with no memory tools, silently — the failure this function was twice rewritten
+// to prevent, arriving through the package manager instead of through PATH.
+//
+// The fixture is the real Homebrew shape, and the assertion is the one that
+// matters: the recorded command still launches something after an upgrade.
+func TestServeCommand_SurvivesAPackageManagerUpgrade(t *testing.T) {
+	prefix := t.TempDir()
+	cellar := filepath.Join(prefix, "Cellar", binaryName, "2.0.0", "bin")
+	if err := os.MkdirAll(cellar, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cellar, binaryName), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(prefix, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stable := filepath.Join(binDir, binaryName)
+	if err := os.Symlink(filepath.Join(cellar, binaryName), stable); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveServeCommand(stable)
+	if got != stable {
+		t.Errorf("recorded %q, want the stable symlink %q — a versioned path is one "+
+			"upgrade from dead", got, stable)
+	}
+
+	// The upgrade: 2.0.0's directory goes away, 2.0.1 appears, the symlink moves.
+	next := filepath.Join(prefix, "Cellar", binaryName, "2.0.1", "bin")
+	if err := os.MkdirAll(next, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(next, binaryName), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(prefix, "Cellar", binaryName, "2.0.0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stable); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(next, binaryName), stable); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("the command written before the upgrade no longer exists (%v) — this "+
+			"is an agent with no memory tools and nothing saying why", err)
+	}
+}
+
+// An absolute path is still right when there is no symlink to prefer: the
+// interactive-vs-non-interactive PATH reasoning that put it there has not
+// changed.
+func TestServeCommand_StillRecordsAnAbsolutePathForAPlainBinary(t *testing.T) {
+	dir := t.TempDir()
+	plain := filepath.Join(dir, binaryName)
+	if err := os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveServeCommand(plain); got != plain {
+		t.Errorf("resolveServeCommand(%q) = %q", plain, got)
+	}
+}
+
+// A path that is not there cannot be recorded as if it were.
+func TestServeCommand_FallsBackWhenTheInvocationPathIsGone(t *testing.T) {
+	t.Setenv("PATH", "")
+	got := resolveServeCommand(filepath.Join(t.TempDir(), "deleted", binaryName))
+	if got != binaryName {
+		t.Errorf("resolveServeCommand on a missing path = %q, want the bare name as "+
+			"the last resort", got)
+	}
+}

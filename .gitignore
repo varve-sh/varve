@@ -10,3 +10,11 @@ bin/
 # Not public. Back this up outside the repo; it is not in git history.
 planning/
 .varve/
+
+# Claude Code's project-scoped MCP config. Conventionally committed so a team
+# is wired on clone — but `varve setup` writes an absolute path to the binary
+# (deliberately: the agent host spawns the server in a non-interactive
+# environment where the user's PATH does not apply), and that path is true on
+# exactly one machine. Committing it hands every teammate a command only the
+# author can run. Each clone runs `varve setup` instead.
+.mcp.json

@@ -364,14 +364,46 @@ var setupNotices []string
 // path breaks only after the binary is moved or removed, and re-running
 // `varve setup` fixes it. A bare name that the host cannot resolve breaks
 // immediately, on a machine where the user just watched setup report success.
+//
+// It does NOT resolve symlinks, and that is the whole point of the split below.
+// Resolving them made "after the binary is moved" mean *every release* for the
+// install path this project recommends first: Homebrew keeps the binary in a
+// versioned Cellar directory and points a stable symlink at it, so
+// EvalSymlinks turned /opt/homebrew/bin/varve into
+// /opt/homebrew/Cellar/varve/2.0.0/bin/varve, and `brew upgrade varve` deleted
+// exactly that path. The agent then has no memory tools, silently, for a reason
+// nothing on screen mentions — the failure this function was twice rewritten to
+// prevent, reintroduced through the package manager. The symlink is the durable
+// name; record it.
+//
+// Observed on this repo the day 2.0.0 shipped: `varve setup` wrote the Cellar
+// path, one `brew upgrade` from dead.
 func serveCommand() string {
-	if self, err := os.Executable(); err == nil {
-		if resolved, err := filepath.EvalSymlinks(self); err == nil {
-			return resolved
-		}
-		return self
+	self, err := os.Executable()
+	if err == nil {
+		return resolveServeCommand(self)
 	}
 	// Only if the executable cannot be located at all.
+	return binaryName
+}
+
+// resolveServeCommand is the testable half: it takes the path the process was
+// started from and returns what belongs in an agent config.
+func resolveServeCommand(self string) string {
+	if !filepath.IsAbs(self) {
+		if abs, err := filepath.Abs(self); err == nil {
+			self = abs
+		}
+	}
+	// The invocation path, unresolved, is what survives an upgrade — provided
+	// it is really there. If it is not (a deleted or relative-only invocation),
+	// a resolved path is better than nothing.
+	if _, err := os.Stat(self); err == nil {
+		return self
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		return resolved
+	}
 	if _, err := exec.LookPath(binaryName); err == nil {
 		return binaryName
 	}
