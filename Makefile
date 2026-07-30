@@ -49,9 +49,25 @@ dogfood: install
 	case "$$head" in *-dirty) \
 		printf '\nnote: working tree is dirty, so you are exercising uncommitted changes.\n' ;; \
 	esac
-	@command -v $(BINARY) >/dev/null 2>&1 \
-		|| printf '\nnote: %s is not on your PATH; invoke it as %s/bin/%s\n' \
-			"$(BINARY)" "$(shell go env GOPATH)" "$(BINARY)"
+	@# The version guard above reads $(GOPATH)/bin/varve by absolute path, so it
+	@# stays honest whatever PATH says. What it cannot see is which binary a bare
+	@# `varve` actually runs — and since the v2.0.0 tap cutover a Homebrew install
+	@# sits ahead of $(GOPATH)/bin on PATH. The two agree on the day you install
+	@# and diverge on the next commit: dogfood reports a match, every command you
+	@# type exercises the released build, and the behaviour under test is missing
+	@# for the same reason as before. That is this target's own failure mode
+	@# displaced by one step, so it is reported here rather than rediscovered.
+	@resolved="$$(command -v $(BINARY) 2>/dev/null)"; \
+	own="$(shell go env GOPATH)/bin/$(BINARY)"; \
+	if [ -z "$$resolved" ]; then \
+		printf '\nnote: %s is not on your PATH; invoke it as %s\n' "$(BINARY)" "$$own"; \
+	elif [ ! "$$resolved" -ef "$$own" ]; then \
+		other="$$("$$resolved" --version 2>/dev/null | awk '{print $$NF}')"; \
+		printf '\nSHADOWED — a bare `%s` runs %s (%s),\n' "$(BINARY)" "$$resolved" "$$other"; \
+		printf '           not the build just installed to %s (%s).\n' "$$own" "$(VERSION)"; \
+		printf '           The binary you type is not the binary dogfood just verified.\n'; \
+		printf '           Invoke by full path, or put %s/bin ahead on PATH.\n' "$(shell go env GOPATH)"; \
+	fi
 	@printf '\n'
 	@# Which store you are about to exercise, resolved rather than assumed — a
 	@# pre-rename store is reported here, not discovered halfway through a run.
