@@ -4,13 +4,25 @@ A decision is not a row you edit. It is a governed object with states,
 transitions, evidence and an append-only history — because the point of memory
 that binds an agent is that you can tell what bound it, and when, and why.
 
+```mermaid
+stateDiagram-v2
+    [*] --> proposed: saved by an agent, an importer, or the v1 migration
+    proposed --> active: accept (evidence required unless forced)
+    proposed --> rejected: reject
+    active --> violated: a commit contradicts its scope
+    violated --> active: violations resolved
+    active --> superseded: a successor is accepted
+    violated --> superseded: a successor is accepted
+    active --> reverted: revert
+    violated --> reverted: revert
+    rejected --> [*]: terminal — the record survives
+    superseded --> [*]: readable, attributable, no longer binding
+    reverted --> [*]: terminal — re-adopting means a new decision
 ```
-proposed ──accept──▶ active ──────────▶ violated ─────┐
-    │                   │                             │
-    │                   ╰──────────────┬──────────────┴──▶ superseded
-    │                                  ╰─────────────────▶ reverted
-    ╰──reject──▶ rejected
-```
+
+`proposed` binds nothing. `active` and `violated` both bind — a violated rule is
+still in force. The three terminal states bind nothing either, but they are
+history you can still read, which is the point of not deleting them.
 
 ---
 

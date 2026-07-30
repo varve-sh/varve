@@ -69,10 +69,18 @@ Two classes of memory, and they behave differently.
 file globs, evidence and provenance, and every transition is written to an
 append-only event log.
 
-```
-proposed ──accept──▶ active ──▶ violated ──▶ superseded
-    │                   │                ╰──▶ reverted
-    ╰──reject──▶ rejected
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> proposed: agent, importer, migration
+    proposed --> active: varve decision accept
+    proposed --> rejected: varve decision reject
+    active --> violated: a commit contradicts it
+    violated --> active: violations resolved
+    active --> superseded: successor accepted
+    violated --> superseded: successor accepted
+    active --> reverted: varve decision revert
+    violated --> reverted: varve decision revert
 ```
 
 **Notes are ungoverned.** Facts, session summaries, prompts — retrievable, no

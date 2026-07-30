@@ -14,11 +14,13 @@ itself, every time.
 
 ## The chain
 
-```
-memory_pack packs a decision into a session      →  pack.item
-a commit lands touching that decision's scope    →  diff.observed + scope_match
-the verdict is recorded                          →  conform | violate
-a later commit reverts it                        →  undone
+```mermaid
+flowchart TD
+    P["memory_pack packs a decision<br/>into a session"] -->|pack.item| C["a commit lands touching<br/>that decision's scope"]
+    C -->|"diff.observed + scope_match"| V{"verdict"}
+    V -->|conform| K["no violation signal detected"]
+    V -->|violate| B["the decision moves to violated"]
+    B -->|"a later commit reverts it"| U["undone"]
 ```
 
 Every link is an append-only event. Every number in `varve report` drills back
