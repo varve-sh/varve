@@ -11,6 +11,7 @@ import (
 func newLintCmd() *cobra.Command {
 	var format string
 	var raw bool
+	var aggregate bool
 
 	cmd := &cobra.Command{
 		Use:   "lint",
@@ -24,7 +25,15 @@ cannot see: paraphrase duplicates and semantic contradictions are not detected.
 The corpus-health score covers your existing memory (dead references, duplicates,
 contradiction candidates, staleness, hygiene). Adoption facts — proposals awaiting
 review, packing history, curated evidence — are listed but never scored: on a
-fresh import they are all "bad" by construction.`,
+fresh import they are all "bad" by construction.
+
+--aggregate prints a summary containing no content from your store: the score and
+its per-category arithmetic, adoption counts, and how many unscored review
+candidates exist — no ids, titles, findings, file paths or scope globs. It is a
+file you can read in full and then choose to send; varve never sends anything.
+The score's discriminating power can only be checked across many corpora, and
+this is the artifact that makes that possible without a decision store leaving
+your machine.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			k, root, err := openKernel()
 			if err != nil {
@@ -47,10 +56,16 @@ fresh import they are all "bad" by construction.`,
 				enc.SetIndent("", "  ")
 				return enc.Encode(res.Checks)
 			}
+			if aggregate {
+				format = "aggregate"
+			}
 			return printReport(cmd, k, root, nil, format)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "", "Output format: md, json (default: terminal text)")
 	cmd.Flags().BoolVar(&raw, "raw", false, "Print the raw rows behind every finding")
+	cmd.Flags().BoolVar(&aggregate, "aggregate", false,
+		"Print a content-free summary: scores, rates and counts, no rows (overrides --format)")
+	cmd.MarkFlagsMutuallyExclusive("raw", "aggregate")
 	return cmd
 }

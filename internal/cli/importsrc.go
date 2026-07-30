@@ -298,6 +298,19 @@ func printReport(cmd *cobra.Command, k *kernel.MemoryKernel, root string,
 			return err
 		}
 		fmt.Fprintln(out, s)
+	case "aggregate":
+		// Built from the same rendered report as every other format, so the
+		// summary can never be a second computation that quietly disagrees
+		// with the number the user was shown.
+		schema, err := kernel.SchemaVersion(db)
+		if err != nil {
+			return err
+		}
+		s, err := lint.NewAggregate(rep, cmd.Root().Version, schema).JSON()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, s)
 	case "md", "markdown":
 		fmt.Fprint(out, rep.Markdown())
 	default:

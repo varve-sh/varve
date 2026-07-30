@@ -165,6 +165,11 @@ func applyOne(db *sql.DB, m migration) error {
 	return tx.Commit()
 }
 
+// SchemaVersion reports the schema version a store is actually at, as opposed
+// to LatestSchemaVersion's "what a fresh database would be". A corpus summary
+// that compares across releases needs the former.
+func SchemaVersion(db *sql.DB) (int, error) { return currentVersion(db) }
+
 func currentVersion(db *sql.DB) (int, error) {
 	var v sql.NullInt64
 	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&v); err != nil {

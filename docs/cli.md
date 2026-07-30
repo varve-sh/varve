@@ -223,7 +223,7 @@ Health-checks the corpus and prints the report — the same report every import
 run ends with.
 
 ```
-varve lint [--format md|json] [--raw]
+varve lint [--format md|json] [--raw] [--aggregate]
 ```
 
 The corpus-health score covers properties of your memory: dead references,
@@ -238,6 +238,21 @@ version, `--raw` prints the rows themselves. The checks are deterministic SQL
 plus local git plumbing — no model runs, and nothing leaves the machine.
 Paraphrase duplicates and semantic contradictions are **not** detected, which
 the report says on its own footer.
+
+`--aggregate` prints a summary containing no content from your store: the score
+and its per-category arithmetic, the method disclosures, adoption counts, how
+many unscored review candidates exist, and the varve and schema versions. No
+IDs, titles, findings, file paths or scope globs — a glob is a path in your
+repository. It exists because whether the score discriminates can only be
+answered across many corpora, and the alternative was asking people to send a
+partial dump of a private store.
+
+```bash
+varve lint --aggregate > varve-health.json   # read it, then send it if you want to
+```
+
+Nothing is transmitted. There is no endpoint and no telemetry; this writes a
+file you can read in full and choose to share.
 
 ---
 
