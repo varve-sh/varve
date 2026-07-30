@@ -20,10 +20,19 @@ A decision an agent saves arrives **proposed**: it doesn't bind, and it isn't pa
 ## Install
 
 ```bash
+brew trust varve-sh/tap          # Homebrew 6 requires this for any third-party tap
 brew install varve-sh/tap/varve
 ```
 
+Without the first line Homebrew 6 refuses the formula — `Refusing to load
+formula varve-sh/tap/varve from untrusted tap varve-sh/tap`. That is Homebrew
+policy for every tap outside homebrew/core, not a problem with this one.
+
 Or: `go install github.com/varve-sh/varve/cmd/varve@latest` · [prebuilt binaries](https://github.com/varve-sh/varve/releases/latest)
+
+> Upgrading from **memtrace**? `brew update && brew upgrade` migrates you — the
+> tap maps the old name to `varve`. Your store is untouched; varve reads a
+> pre-rename `.memtrace/memtrace.db` in place and tells you so.
 
 ---
 
