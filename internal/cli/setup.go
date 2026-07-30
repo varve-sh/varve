@@ -337,23 +337,33 @@ func appendInstructions(path, snippet string) {
 // reported rather than discovered. Drained by the setup command.
 var setupNotices []string
 
-// serveCommand is the command an agent config should launch.
+// serveCommand is the command an agent config should launch: the absolute path
+// to this executable whenever it can be determined.
 //
-// It is the bare binary name when that resolves on PATH, and the absolute path
-// to this executable when it does not. Writing "varve" unconditionally produced
-// an MCP entry that silently failed to start for anyone whose install directory
-// is not on PATH — `go install` and `make install` both land in $GOPATH/bin,
-// which is not on PATH by default on macOS. setup reported success and the agent
-// simply had no memory tools, with nothing anywhere saying why.
+// The obvious implementation prefers the bare name when exec.LookPath finds it,
+// on the reasoning that an absolute path baked into a config goes stale. That is
+// backwards, and testing it showed why: `varve setup` runs in the user's
+// interactive shell, while the MCP server is spawned by the agent host in a
+// non-interactive environment. Those are different environments. On a stock
+// macOS zsh setup, `export PATH=...` in ~/.zshrc applies to the first and not
+// the second — measured: `zsh -i -l -c 'command -v varve'` resolves, `zsh -c`
+// does not — so LookPath succeeding at setup time proves nothing about whether
+// the host can launch it.
+//
+// Both failure modes are silent, so pick the recoverable one. A stale absolute
+// path breaks only after the binary is moved or removed, and re-running
+// `varve setup` fixes it. A bare name that the host cannot resolve breaks
+// immediately, on a machine where the user just watched setup report success.
 func serveCommand() string {
-	if _, err := exec.LookPath(binaryName); err == nil {
-		return binaryName
-	}
 	if self, err := os.Executable(); err == nil {
 		if resolved, err := filepath.EvalSymlinks(self); err == nil {
 			return resolved
 		}
 		return self
+	}
+	// Only if the executable cannot be located at all.
+	if _, err := exec.LookPath(binaryName); err == nil {
+		return binaryName
 	}
 	return binaryName
 }

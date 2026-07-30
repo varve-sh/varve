@@ -419,10 +419,11 @@ func TestServeCommand_IsLaunchableWhenTheBinaryIsNotOnPATH(t *testing.T) {
 	}
 }
 
-// When it does resolve, the bare name is preferred — an absolute path baked into
-// a config survives past the binary it names (a later `brew install` puts varve
-// somewhere else, and the old path keeps being launched).
-func TestServeCommand_PrefersTheBareNameWhenItResolves(t *testing.T) {
+// Even when the bare name resolves in THIS process, the config gets the absolute
+// path: setup runs in the user's shell, the MCP server runs in the agent host's
+// environment, and on a stock macOS zsh setup a ~/.zshrc PATH export reaches the
+// first and not the second.
+func TestServeCommand_UsesAnAbsolutePathEvenWhenPATHResolves(t *testing.T) {
 	dir := t.TempDir()
 	stub := filepath.Join(dir, binaryName)
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -430,7 +431,12 @@ func TestServeCommand_PrefersTheBareNameWhenItResolves(t *testing.T) {
 	}
 	t.Setenv("PATH", dir)
 
-	if got := serveCommand(); got != binaryName {
-		t.Errorf("serveCommand() = %q, want the bare %q when it is on PATH", got, binaryName)
+	got := serveCommand()
+	if got == binaryName {
+		t.Fatal("serveCommand() returned the bare name; a host that cannot resolve " +
+			"it gets no memory tools and no explanation")
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("serveCommand() = %q, want an absolute path", got)
 	}
 }
