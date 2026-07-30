@@ -85,6 +85,26 @@ func newMigrateCmd() *cobra.Command {
 				return err
 			}
 
+			// The observation epoch. `varve init` records one; migration did not,
+			// and a project with no epoch has no "pre-epoch" for the observer to
+			// exclude — so `varve scan` treated four months of pre-existing history
+			// as live observation, wrote 67 unflagged scope matches, and the report
+			// then claimed "86 of 86 default-branch commits observed (100%)" for a
+			// period varve had watched none of. §D1.3 requires those matches to
+			// carry backfill:true and be excluded from every metric; without an
+			// epoch the safeguard cannot engage. Found by dogfooding a real store.
+			//
+			// Idempotent (RecordObserverEnabled writes once), so a re-run is safe.
+			ke := kernel.New(dbPath, projectID)
+			if err := ke.Open(); err != nil {
+				return fmt.Errorf("recording the observation epoch: %w", err)
+			}
+			epochErr := ke.RecordObserverEnabled(time.Now().UTC())
+			ke.Close()
+			if epochErr != nil {
+				return fmt.Errorf("recording the observation epoch: %w", epochErr)
+			}
+
 			// Register only now, adopting the id the migrated rows carry.
 			name := filepath.Base(projectRoot)
 			if !registered {

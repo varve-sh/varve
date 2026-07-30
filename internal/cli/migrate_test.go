@@ -376,3 +376,35 @@ func TestInit_WritesNoConfigEntryWhenTheStoreCannotBeOpened(t *testing.T) {
 		t.Error("init failed but left a config entry behind — partial state on an error path")
 	}
 }
+
+// A migrated project must have an observation epoch.
+//
+// `varve init` records one; `migrate --from-v1` did not. A project with no epoch
+// has no "pre-epoch" for the observer to exclude, so `varve scan` treats all
+// pre-existing history as live observation: on a real store it wrote 67 unflagged
+// scope matches spanning four months, and the report then claimed "86 of 86
+// default-branch commits observed (100%)" for a period varve had watched none of.
+// §D1.3's backfill exclusion cannot engage without an epoch to compare against.
+func TestMigrateFromV1_RecordsTheObservationEpoch(t *testing.T) {
+	root, _ := setupV1Project(t)
+	t.Chdir(root)
+
+	if out, err := runCmd(t, "migrate", "--from-v1"); err != nil {
+		t.Fatalf("migrate: %v\n%s", err, out)
+	}
+
+	db, err := kernel.OpenDB(util.GetProjectDbPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM events WHERE kind = 'observer.enabled'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("observer.enabled events = %d, want exactly 1 — without an epoch the "+
+			"observer counts pre-existing history as live observation", n)
+	}
+}
