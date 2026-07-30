@@ -303,9 +303,24 @@ Converts a v1 database (one `memories` table) to the v2 decision-lifecycle schem
 varve migrate --from-v1
 ```
 
-**Not available yet.** The v2 read paths are still being built, so a converted database would read as empty — every row would move into `decisions`/`notes`, which no command queries yet. The command refuses until they land, and your v1 database keeps working unchanged in the meantime.
+The v1 file is moved aside to `.varve/varve.v1.bak.db` and kept indefinitely — nothing deletes it — along with the JSON export at `.varve/migration-v1-export.json`. Decisions and conventions become governed `decisions`; facts and events become `notes`. v2 databases upgrade themselves when opened; only the v1 conversion is manual.
 
-When it does run: the v1 file is moved aside to `.varve/varve.v1.bak.db` and kept indefinitely — nothing deletes it — along with the JSON export at `.varve/migration-v1-export.json`. Decisions and conventions become governed `decisions`; facts and events become `notes`. v2 databases upgrade themselves when opened; only the v1 conversion is manual.
+The command does not require a config entry, so it works on an unregistered store: migration is a repair on a database that already exists, and the project id it needs is read out of that database. Registration follows a successful migration rather than gating it.
+
+---
+
+## `varve store`
+
+Inspects and relocates the store itself.
+
+```bash
+varve store move --dry-run   # show what would move
+varve store move
+```
+
+`move` is the memtrace→varve rename repair: it moves `.memtrace/memtrace.db`, its WAL sidecars, the observer log and the config to `.varve/varve.db`. Nothing is deleted — the old directory stays in place if it holds anything unrecognised, and the move is skipped entirely if a store already exists at the new location.
+
+This is separate from `migrate`: `move` changes where the store lives, `migrate` changes what is inside it.
 
 ---
 
