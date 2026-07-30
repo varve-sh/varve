@@ -55,9 +55,18 @@ type Options struct {
 // Finding is one flagged row. Every field that appears in the report is here,
 // because the report may not compute anything the JSON output cannot show.
 type Finding struct {
-	ID        string   `json:"id"`
-	Title     string   `json:"title,omitempty"`
-	Detail    string   `json:"detail,omitempty"`
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"`
+	// Detail is what is wrong with this row.
+	Detail string `json:"detail,omitempty"`
+	// SourceRef is where the row came from in the user's own files —
+	// `CLAUDE.md#<hash>`, a rules file and line, the foreign store it was
+	// imported out of. It means the same thing in every check.
+	//
+	// It is what ADR-0005's second reversible call rests on: the report is
+	// designed to be valuable to someone who fixes their source files and then
+	// uninstalls, and that person cannot act on a ULID. A finding without this
+	// field points into a database they were told they need not keep.
 	SourceRef string   `json:"source_ref,omitempty"`
 	Related   []string `json:"related,omitempty"`
 }
@@ -299,7 +308,7 @@ func checkL3(db *sql.DB, opts Options, res *Result, tree *treeIndex) (Check, err
 	c := Check{ID: "L3", Name: "dead references", Scored: true,
 		Misses: "pr/url/import refs (no network), and commits that exist locally but vanished from all remotes"}
 	rows, err := db.Query(`
-		SELECT e.id, e.decision_id, e.kind, e.ref
+		SELECT e.id, e.decision_id, e.kind, e.ref, COALESCE(d.source_ref,'')
 		  FROM evidence e JOIN decisions d ON d.id = e.decision_id
 		 WHERE d.project_id = ? AND d.status IN ('proposed','active','violated')
 		   AND e.kind IN ('commit','file')`, opts.ProjectID)
@@ -307,11 +316,11 @@ func checkL3(db *sql.DB, opts Options, res *Result, tree *treeIndex) (Check, err
 		return c, err
 	}
 	defer rows.Close()
-	type ref struct{ id, decisionID, kind, ref string }
+	type ref struct{ id, decisionID, kind, ref, sourceRef string }
 	var refs []ref
 	for rows.Next() {
 		var r ref
-		if err := rows.Scan(&r.id, &r.decisionID, &r.kind, &r.ref); err != nil {
+		if err := rows.Scan(&r.id, &r.decisionID, &r.kind, &r.ref, &r.sourceRef); err != nil {
 			return c, err
 		}
 		refs = append(refs, r)
@@ -336,8 +345,10 @@ func checkL3(db *sql.DB, opts Options, res *Result, tree *treeIndex) (Check, err
 			}
 			c.Checked++
 			if !opts.CommitExists(r.ref) {
+				// The dead ref belongs in Detail; SourceRef says where the rule
+				// carrying it lives, which is the file the user would edit.
 				c.Findings = append(c.Findings, Finding{ID: r.decisionID,
-					Detail: "unreachable commit " + shortSHA(r.ref), SourceRef: r.ref})
+					Detail: "unreachable commit " + shortSHA(r.ref), SourceRef: r.sourceRef})
 			}
 		case "file":
 			if opts.RepoRoot == "" {
@@ -346,7 +357,7 @@ func checkL3(db *sql.DB, opts Options, res *Result, tree *treeIndex) (Check, err
 			c.Checked++
 			if _, err := os.Stat(filepath.Join(opts.RepoRoot, r.ref)); err != nil {
 				c.Findings = append(c.Findings, Finding{ID: r.decisionID,
-					Detail: "missing file " + r.ref, SourceRef: r.ref})
+					Detail: "missing file " + r.ref, SourceRef: r.sourceRef})
 			}
 		}
 	}
@@ -414,16 +425,17 @@ func checkL5(db *sql.DB, opts Options, res *Result, _ *treeIndex) (Check, error)
 		groups[hash] = append(groups[hash], f)
 	}
 
-	rows, err := db.Query(`SELECT id, title, body, embedding IS NOT NULL FROM decisions
+	rows, err := db.Query(`SELECT id, title, body, COALESCE(source_ref,''), embedding IS NOT NULL
+		  FROM decisions
 		 WHERE project_id = ? AND status IN ('proposed','active','violated')`, opts.ProjectID)
 	if err != nil {
 		return c, err
 	}
 	unembedded := 0
 	for rows.Next() {
-		var id, title, body string
+		var id, title, body, sourceRef string
 		var embedded bool
-		if err := rows.Scan(&id, &title, &body, &embedded); err != nil {
+		if err := rows.Scan(&id, &title, &body, &sourceRef, &embedded); err != nil {
 			rows.Close()
 			return c, err
 		}
@@ -431,30 +443,31 @@ func checkL5(db *sql.DB, opts Options, res *Result, _ *treeIndex) (Check, error)
 			unembedded++
 		}
 		c.Checked++
-		add(importer.NormalizeText(title+" "+body), Finding{ID: id, Title: title})
+		add(importer.NormalizeText(title+" "+body), Finding{ID: id, Title: title, SourceRef: sourceRef})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return c, err
 	}
 
-	nrows, err := db.Query(`SELECT id, content, embedding IS NOT NULL FROM notes
+	nrows, err := db.Query(`SELECT id, content, COALESCE(source_ref,''), embedding IS NOT NULL
+		  FROM notes
 		 WHERE project_id = ? AND status IN ('active','stale')`, opts.ProjectID)
 	if err != nil {
 		return c, err
 	}
 	defer nrows.Close()
 	for nrows.Next() {
-		var id, content string
+		var id, content, sourceRef string
 		var embedded bool
-		if err := nrows.Scan(&id, &content, &embedded); err != nil {
+		if err := nrows.Scan(&id, &content, &sourceRef, &embedded); err != nil {
 			return c, err
 		}
 		if !embedded {
 			unembedded++
 		}
 		c.Checked++
-		add(importer.NormalizeText(content), Finding{ID: id, Title: truncate(content, 60)})
+		add(importer.NormalizeText(content), Finding{ID: id, Title: truncate(content, 60), SourceRef: sourceRef})
 	}
 	if err := nrows.Err(); err != nil {
 		return c, err
@@ -509,7 +522,8 @@ func checkL6(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 		Misses: "semantic contradictions between rows with different titles and scopes — not structurally detectable; " +
 			"shared-scope candidates are listed but not scored (calibration pending)"}
 	rows, err := db.Query(`
-		SELECT id, title, body, scope, kind, COALESCE(topic_key,'') FROM decisions
+		SELECT id, title, body, scope, kind, COALESCE(topic_key,''), COALESCE(source_ref,'')
+		  FROM decisions
 		 WHERE project_id = ? AND status IN ('proposed','active','violated')
 		 ORDER BY id`, opts.ProjectID)
 	if err != nil {
@@ -517,14 +531,14 @@ func checkL6(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 	}
 	defer rows.Close()
 	type row struct {
-		id, title, body, kind, topicKey string
-		scope                           []string
+		id, title, body, kind, topicKey, sourceRef string
+		scope                                      []string
 	}
 	var all []row
 	for rows.Next() {
 		var r row
 		var scopeJSON string
-		if err := rows.Scan(&r.id, &r.title, &r.body, &scopeJSON, &r.kind, &r.topicKey); err != nil {
+		if err := rows.Scan(&r.id, &r.title, &r.body, &scopeJSON, &r.kind, &r.topicKey, &r.sourceRef); err != nil {
 			return c, err
 		}
 		r.scope = decodeJSONArray(scopeJSON)
@@ -542,7 +556,8 @@ func checkL6(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 	noteScored := func(a, b row) {
 		f, ok := scored[a.id]
 		if !ok {
-			f = &Finding{ID: a.id, Title: a.title, Detail: "identical title, different body"}
+			f = &Finding{ID: a.id, Title: a.title, Detail: "identical title, different body",
+				SourceRef: a.sourceRef}
 			scored[a.id] = f
 		}
 		f.Related = append(f.Related, b.id)
@@ -614,8 +629,9 @@ func checkL6(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) {
 				a, b := all[members[x]], all[members[y]]
 				cands = append(cands, cand{
 					f: Finding{ID: a.id, Title: a.title,
-						Detail:  "shares scope glob " + g + " with " + b.id + " — review candidate, not a verdict",
-						Related: []string{b.id}},
+						Detail:    "shares scope glob " + g + " with " + b.id + " — review candidate, not a verdict",
+						SourceRef: a.sourceRef,
+						Related:   []string{b.id}},
 					bothConvention: a.kind == "convention" && b.kind == "convention",
 					bothUntopiced:  a.topicKey == "" && b.topicKey == "",
 				})
@@ -677,7 +693,7 @@ func checkL7(db *sql.DB, opts Options, _ *Result, tree *treeIndex) (Check, error
 		Misses: "a stale-dated rule that is still correct — staleness is a prompt to re-confirm, never an auto-transition"}
 	cutoff := opts.Now.AddDate(0, 0, -180).Format("2006-01-02T15:04:05Z")
 	rows, err := db.Query(`
-		SELECT id, title, scope,
+		SELECT id, title, scope, COALESCE(source_ref,''),
 		       max(updated_at, coalesce(decided_at,''), status_changed_at) AS touched
 		  FROM decisions
 		 WHERE project_id = ? AND status IN ('proposed','active','violated')`,
@@ -687,8 +703,8 @@ func checkL7(db *sql.DB, opts Options, _ *Result, tree *treeIndex) (Check, error
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, title, scopeJSON, touched string
-		if err := rows.Scan(&id, &title, &scopeJSON, &touched); err != nil {
+		var id, title, scopeJSON, sourceRef, touched string
+		if err := rows.Scan(&id, &title, &scopeJSON, &sourceRef, &touched); err != nil {
 			return c, err
 		}
 		c.Checked++
@@ -704,27 +720,27 @@ func checkL7(db *sql.DB, opts Options, _ *Result, tree *treeIndex) (Check, error
 			continue
 		}
 		c.Findings = append(c.Findings, Finding{ID: id, Title: title,
-			Detail: "untouched since " + touched})
+			Detail: "untouched since " + touched, SourceRef: sourceRef})
 	}
 	if err := rows.Err(); err != nil {
 		return c, err
 	}
 
-	nrows, err := db.Query(`SELECT id, content, updated_at FROM notes
+	nrows, err := db.Query(`SELECT id, content, COALESCE(source_ref,''), updated_at FROM notes
 		 WHERE project_id = ? AND status IN ('active','stale')`, opts.ProjectID)
 	if err != nil {
 		return c, err
 	}
 	defer nrows.Close()
 	for nrows.Next() {
-		var id, content, updated string
-		if err := nrows.Scan(&id, &content, &updated); err != nil {
+		var id, content, sourceRef, updated string
+		if err := nrows.Scan(&id, &content, &sourceRef, &updated); err != nil {
 			return c, err
 		}
 		c.Checked++
 		if updated < cutoff {
 			c.Findings = append(c.Findings, Finding{ID: id, Title: truncate(content, 60),
-				Detail: "untouched since " + updated})
+				Detail: "untouched since " + updated, SourceRef: sourceRef})
 		}
 	}
 	return c, nrows.Err()
@@ -896,7 +912,7 @@ func checkL10(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) 
 		return c, err
 	}
 	rows, err := db.Query(`
-		SELECT id, title, scope FROM decisions
+		SELECT id, title, scope, COALESCE(source_ref,'') FROM decisions
 		 WHERE project_id = ? AND kind = 'decision'
 		   AND status IN ('proposed','active','violated')
 		   AND scope IN ('["**"]', '[]')
@@ -908,7 +924,7 @@ func checkL10(db *sql.DB, opts Options, _ *Result, _ *treeIndex) (Check, error) 
 	for rows.Next() {
 		var f Finding
 		var scope string
-		if err := rows.Scan(&f.ID, &f.Title, &scope); err != nil {
+		if err := rows.Scan(&f.ID, &f.Title, &scope, &f.SourceRef); err != nil {
 			return c, err
 		}
 		if scope == `["**"]` {

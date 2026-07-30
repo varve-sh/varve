@@ -769,3 +769,91 @@ func TestL6_CandidatesAreVisibleAndLabelledUnscoredOnEverySurface(t *testing.T) 
 		t.Error("markdown drops the calibration-pending disclosure that Amendment 2 added")
 	}
 }
+
+// ADR-0005's second reversible call — "the report is deliberately designed to
+// be valuable to someone who then uninstalls" — rests on one mechanism, stated
+// in §D4: "every finding names its rows (ID, source_ref — down to
+// CLAUDE.md#<hash> / file+line for file sources), so a user can fix their
+// source files directly and never install varve."
+//
+// Only L3 populated the field, and there it carried the dead ref rather than
+// the row's origin. Every other scored check rendered ULIDs — identifiers into
+// a database the target of this call was told they need not keep, which makes
+// the call an intention rather than a shipped property.
+func TestFindings_NameTheUsersOwnFileNotJustTheRowID(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, root)
+
+	k := kernel.New(filepath.Join(t.TempDir(), "src.db"), project)
+	if err := k.Open(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k.Close() })
+	db := k.Decisions().DB()
+
+	now := time.Now().UTC()
+	fresh, old := ts(now), ts(now.AddDate(0, 0, -200))
+	dec := func(id, title, body, scope, sourceRef, touched string) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO decisions
+			(id, project_id, kind, title, body, status, scope, source, source_ref,
+			 created_at, updated_at, decided_at, status_changed_at)
+			VALUES (?,?, 'decision', ?,?, 'active', ?, 'import', ?,?,?,?,?)`,
+			id, project, title, body, scope, sourceRef, touched, touched, touched, touched); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two identical rows imported from two blocks of one file (L5), two rival
+	// rules from a rules file (L6, both tiers), a stale row (L7), a repo-wide
+	// row (L10), and a dead file reference hanging off it (L3).
+	dec("s1", "Use pnpm", "npm lockfiles drift", `[]`, "CLAUDE.md#a1b2c3", fresh)
+	dec("s2", "Use pnpm", "npm lockfiles drift", `[]`, "CLAUDE.md#d4e5f6", fresh)
+	dec("s3", "Ship on Friday", "never", `["deploy/*.sh"]`, ".cursor/rules/deploy.mdc:12", fresh)
+	dec("s4", "Ship on Friday", "always", `["deploy/*.sh"]`, ".cursor/rules/deploy.mdc:20", fresh)
+	dec("s5", "Old rule", "unrevisited", `[]`, "CLAUDE.md#0f0f0f", old)
+	dec("s6", "All code is reviewed", "", `["**"]`, "AGENTS.md#999999", fresh)
+	if _, err := db.Exec(`INSERT INTO evidence (id, decision_id, kind, ref, added_by, created_at)
+		VALUES ('e1', 's6', 'file', 'deleted/gone.go', 'human', ?)`, fresh); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		if _, err := db.Exec(`INSERT INTO notes (id, project_id, content, source, source_ref, status, created_at, updated_at)
+			VALUES (?,?,?, 'import', ?, 'active', ?, ?)`,
+			"n"+itoa(i), project, "imported note "+itoa(i), "claude-mem#"+itoa(i), fresh, fresh); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := Run(db, Options{ProjectID: project, RepoRoot: root, Now: now,
+		CommitExists: GitCommitExists(root)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"L3", "L5", "L6", "L7", "L10"} {
+		c := res.Check(id)
+		if c == nil || (len(c.Findings) == 0 && len(c.Candidates) == 0) {
+			t.Errorf("%s produced nothing, so its source_ref assertion is vacuous", id)
+			continue
+		}
+		for _, f := range append(append([]Finding{}, c.Findings...), c.Candidates...) {
+			if f.SourceRef == "" {
+				t.Errorf("%s finding %s names no source file — the reader who wants to "+
+					"fix their own files and leave gets a row ID into a store they are "+
+					"about to delete", id, f.ID)
+			}
+		}
+	}
+
+	// The forwardable artifact is where this actually has to land.
+	md := (&Report{GeneratedAt: now, Repo: "fixture", Lint: res,
+		Backlog: &ProposedBacklog{}}).Markdown()
+	for _, want := range []string{"CLAUDE.md#a1b2c3", ".cursor/rules/deploy.mdc:12", "AGENTS.md#999999"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the markdown report never names %s:\n%s", want, md)
+		}
+	}
+}
