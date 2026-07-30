@@ -243,6 +243,106 @@ func TestSetupAgent_Gemini(t *testing.T) {
 	}
 }
 
+// The paths setup wrote for years — .claude/mcp.json and ~/.claude/mcp.json —
+// are not read by Claude Code, which loads project MCP servers from .mcp.json
+// and user-scoped ones from ~/.claude.json. Setup reported success and the
+// agent came up with no memory tools.
+func TestSetupAgent_ClaudeCodeWritesTheConfigClaudeCodeReads(t *testing.T) {
+	dir := t.TempDir()
+	setupNotices = nil
+	defer func() { setupNotices = nil }()
+
+	wrote, err := setupAgent("claude-code", dir, false)
+	if err != nil || !wrote {
+		t.Fatalf("setupAgent = %v, %v", wrote, err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("nothing written to .mcp.json, the file Claude Code loads: %v", err)
+	}
+	var cfg map[string]map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("invalid JSON written: %v", err)
+	}
+	if _, ok := cfg["mcpServers"]["varve"]; !ok {
+		t.Errorf("varve entry missing from .mcp.json: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude", "mcp.json")); err == nil {
+		t.Error("setup still writes .claude/mcp.json, which nothing reads")
+	}
+}
+
+// A config left by an older setup is indistinguishable, to a user debugging
+// missing memory tools, from a working one. Re-running setup removes it.
+func TestSetupAgent_RemovesTheConfigThatNeverWorked(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, ".claude", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy,
+		[]byte(`{"mcpServers":{"varve":{"command":"varve","args":["serve"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupNotices = nil
+	defer func() { setupNotices = nil }()
+
+	if _, err := setupAgent("claude-code", dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacy); err == nil {
+		t.Error(".claude/mcp.json survived, still looking like a working config")
+	}
+	if len(setupNotices) == 0 || !strings.Contains(strings.Join(setupNotices, " "), ".claude/mcp.json") {
+		t.Errorf("a file the user owns was changed silently: %v", setupNotices)
+	}
+}
+
+// Only varve's own entry is this tool's to remove. Another server's entry in
+// the same file is the user's, however useless the path.
+func TestSetupAgent_LeavesOtherServersInTheLegacyFile(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, ".claude", "mcp.json")
+	os.MkdirAll(filepath.Dir(legacy), 0o755)
+	os.WriteFile(legacy, []byte(
+		`{"mcpServers":{"varve":{"command":"varve"},"other":{"command":"other"}}}`), 0o644)
+	setupNotices = nil
+	defer func() { setupNotices = nil }()
+
+	if _, err := setupAgent("claude-code", dir, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(legacy)
+	if err != nil {
+		t.Fatalf("a file holding another server's entry was deleted: %v", err)
+	}
+	var cfg map[string]map[string]any
+	json.Unmarshal(data, &cfg)
+	if _, ok := cfg["mcpServers"]["other"]; !ok {
+		t.Errorf("another server's entry was removed: %s", data)
+	}
+	if _, ok := cfg["mcpServers"]["varve"]; ok {
+		t.Errorf("the dead varve entry survived: %s", data)
+	}
+}
+
+// A project with .mcp.json but no .claude/ is still a Claude Code project, and
+// each agent is set up once however many of its markers are present.
+func TestDetectAgents_MCPJSONMeansClaudeCode(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0o644)
+
+	if agents := detectAgents(dir); len(agents) != 1 || agents[0] != "claude-code" {
+		t.Errorf("detectAgents = %v, want [claude-code]", agents)
+	}
+
+	os.MkdirAll(filepath.Join(dir, ".claude"), 0o755)
+	if agents := detectAgents(dir); len(agents) != 1 {
+		t.Errorf("detectAgents = %v, want claude-code listed once", agents)
+	}
+}
+
 func TestSetupAgent_UnknownAgent(t *testing.T) {
 	_, err := setupAgent("notanagent", t.TempDir(), false)
 	if err == nil {

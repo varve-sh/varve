@@ -785,9 +785,8 @@ func TestDoctorCmd_AllOK(t *testing.T) {
 
 	// Write a CLAUDE.md with varve instructions.
 	os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("Use memory_save to store decisions."), 0644)
-	// Write a .claude/mcp.json referencing varve.
-	os.MkdirAll(filepath.Join(root, ".claude"), 0755)
-	os.WriteFile(filepath.Join(root, ".claude", "mcp.json"), []byte(`{"mcpServers":{"varve":{"command":"varve","args":["serve"]}}}`), 0644)
+	// Write the MCP config Claude Code actually reads, referencing varve.
+	os.WriteFile(filepath.Join(root, ".mcp.json"), []byte(`{"mcpServers":{"varve":{"command":"varve","args":["serve"]}}}`), 0644)
 
 	out, err := runCmd(t, "doctor")
 	if err != nil {

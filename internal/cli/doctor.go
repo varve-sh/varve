@@ -153,10 +153,10 @@ func checkMCPConfig(projectRoot string, ok, warn, fail func(string, string)) {
 		path  string
 		label string
 	}{
-		{filepath.Join(projectRoot, ".claude", "mcp.json"), ".claude/mcp.json"},
+		{claudeProjectConfigPath(projectRoot), ".mcp.json"},
 		{filepath.Join(projectRoot, ".cursor", "mcp.json"), ".cursor/mcp.json"},
 		{filepath.Join(projectRoot, ".vscode", "mcp.json"), ".vscode/mcp.json"},
-		{claudeUserMCPConfig(), "~/.claude/mcp.json"},
+		{claudeUserMCPConfig(), "~/.claude.json"},
 	}
 
 	for _, c := range candidates {
@@ -169,12 +169,29 @@ func checkMCPConfig(projectRoot string, ok, warn, fail func(string, string)) {
 			return
 		}
 	}
+
+	// An entry in a path Claude Code does not read looks like a working config
+	// to the person reading it, so say which one it is rather than "not found".
+	home, _ := os.UserHomeDir()
+	for _, legacy := range []struct{ path, label string }{
+		{filepath.Join(projectRoot, ".claude", "mcp.json"), ".claude/mcp.json"},
+		{filepath.Join(home, ".claude", "mcp.json"), "~/.claude/mcp.json"},
+	} {
+		data, err := os.ReadFile(legacy.path)
+		if err != nil || !strings.Contains(string(data), "varve") {
+			continue
+		}
+		warn("MCP config", fmt.Sprintf(
+			"varve is in %s, which Claude Code does not read — run 'varve setup' to move it", legacy.label))
+		return
+	}
+
 	warn("MCP config", "varve not found in any MCP config — run 'varve setup'")
 }
 
 func claudeUserMCPConfig() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "mcp.json")
+	return claudeUserConfigPath(home)
 }
 
 func checkClaudeMD(projectRoot string, ok, warn func(string, string)) {

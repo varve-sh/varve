@@ -20,7 +20,7 @@ func newSetupCmd() *cobra.Command {
 		Long: `Adds varve to your agent's MCP configuration so it is available in every session.
 
 Supported agents:
-  claude-code   Writes to .claude/mcp.json (or ~/.claude/mcp.json with --global)
+  claude-code   Writes to .mcp.json (or ~/.claude.json with --global)
   cursor        Writes to .cursor/mcp.json
   vscode        Writes to .vscode/mcp.json
   opencode      Writes to opencode.json (project root)
@@ -79,7 +79,7 @@ The command is idempotent — running it again is safe.`,
 		},
 	}
 
-	cmd.Flags().BoolVar(&global, "global", false, "Install at user scope (~/.claude/mcp.json) instead of project scope (claude-code only)")
+	cmd.Flags().BoolVar(&global, "global", false, "Install at user scope (~/.claude.json) instead of project scope (claude-code only)")
 	return cmd
 }
 
@@ -109,15 +109,24 @@ func detectAgents(projectRoot string) []string {
 		agent string
 	}{
 		{".claude", "claude-code"},
+		// A project already carrying MCP servers Claude Code reads is a Claude
+		// Code project even without a .claude/ directory.
+		{".mcp.json", "claude-code"},
 		{".cursor", "cursor"},
 		{".vscode", "vscode"},
 		{"opencode.json", "opencode"},
 		{".gemini", "gemini"},
 	}
+	seen := map[string]bool{}
 	for _, c := range checks {
-		if _, err := os.Stat(filepath.Join(projectRoot, c.path)); err == nil {
-			found = append(found, c.agent)
+		if _, err := os.Stat(filepath.Join(projectRoot, c.path)); err != nil {
+			continue
 		}
+		if seen[c.agent] {
+			continue
+		}
+		seen[c.agent] = true
+		found = append(found, c.agent)
 	}
 	if len(found) == 0 {
 		return []string{"claude-code"}
@@ -136,10 +145,11 @@ func setupAgent(agent, projectRoot string, global bool) (bool, error) {
 			if err != nil {
 				return false, fmt.Errorf("could not find home directory: %w", err)
 			}
-			configPath = filepath.Join(home, ".claude", "mcp.json")
+			configPath = claudeUserConfigPath(home)
 		} else {
-			configPath = filepath.Join(projectRoot, ".claude", "mcp.json")
+			configPath = claudeProjectConfigPath(projectRoot)
 		}
+		dropLegacyClaudeEntry(projectRoot, global)
 		written, err := writeMCPEntry(configPath, "mcpServers", map[string]interface{}{
 			"command": serveCommand(),
 			"args":    []string{"serve"},
@@ -369,6 +379,77 @@ func serveCommand() string {
 }
 
 const binaryName = "varve"
+
+// Claude Code reads project-scoped MCP servers from .mcp.json at the project
+// root, and user-scoped ones from ~/.claude.json. It reads neither
+// .claude/mcp.json nor ~/.claude/mcp.json — those paths look plausible next to
+// .claude/settings.json, but nothing loads them, so setup reported success and
+// the agent started with no memory tools and no explanation. Same failure shape
+// as the bare-name command bug: silent, and indistinguishable from varve being
+// broken.
+func claudeProjectConfigPath(projectRoot string) string {
+	return filepath.Join(projectRoot, ".mcp.json")
+}
+
+func claudeUserConfigPath(home string) string {
+	return filepath.Join(home, ".claude.json")
+}
+
+// dropLegacyClaudeEntry removes a varve entry left in one of the paths setup
+// used to write, which Claude Code never read. Leaving it costs nothing at
+// runtime but it is indistinguishable, to anyone reading the file, from a
+// working config — so a user debugging "why are there no memory tools" finds
+// exactly what the docs told them to look for. Re-running setup is the
+// documented repair, so it removes the decoy.
+func dropLegacyClaudeEntry(projectRoot string, global bool) {
+	path := filepath.Join(projectRoot, ".claude", "mcp.json")
+	label := ".claude/mcp.json"
+	if global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		path = filepath.Join(home, ".claude", "mcp.json")
+		label = "~/.claude/mcp.json"
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return
+	}
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	_, hasVarve := servers["varve"]
+	_, hasLegacy := servers["memtrace"]
+	if !hasVarve && !hasLegacy {
+		return
+	}
+	delete(servers, "varve")
+	delete(servers, "memtrace")
+
+	// A file this tool created for itself, now empty, is removed rather than
+	// left as an empty shell the user has to wonder about. A file with anything
+	// else in it belongs to the user and is only edited.
+	if len(servers) == 0 && len(cfg) == 1 {
+		if err := os.Remove(path); err == nil {
+			setupNotices = append(setupNotices,
+				"removed "+label+" — Claude Code never read it (the entry now lives in the config it does read)")
+		}
+		return
+	}
+	cfg["mcpServers"] = servers
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0644); err == nil {
+		setupNotices = append(setupNotices,
+			"removed the varve entry from "+label+" — Claude Code never read it")
+	}
+}
 
 // writeMCPEntry reads (or creates) the JSON config at path, merges the varve
 // entry under the given key, and writes it back. Returns false if already present.

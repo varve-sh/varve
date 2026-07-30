@@ -3,7 +3,7 @@
 `varve setup` writes the MCP config entry for your agent. It is idempotent — running it again is safe and merges into existing configs without overwriting other entries.
 
 ```bash
-varve setup   # auto-detect from .claude/, .cursor/, .vscode/, opencode.json, .gemini/
+varve setup   # auto-detect from .claude/, .mcp.json, .cursor/, .vscode/, opencode.json, .gemini/
 ```
 
 ---
@@ -16,7 +16,7 @@ varve setup   # auto-detect from .claude/, .cursor/, .vscode/, opencode.json, .g
 varve setup claude-code
 ```
 
-Writes to `.claude/mcp.json`:
+Writes to `.mcp.json` in the project root — the file Claude Code loads project-scoped MCP servers from:
 
 ```json
 {
@@ -35,7 +35,9 @@ Writes to `.claude/mcp.json`:
 varve setup --global
 ```
 
-Writes to `~/.claude/mcp.json`.
+Writes to `~/.claude.json`, merging into whatever is already there.
+
+> Earlier versions wrote `.claude/mcp.json` and `~/.claude/mcp.json`. Claude Code reads neither, so those entries never loaded. Re-running `varve setup` writes the correct file and removes the dead entry; `varve doctor` names it if it is still around.
 
 ---
 

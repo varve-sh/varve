@@ -58,14 +58,14 @@ varve init --no-import       # skip auto-import
 Writes the MCP server entry into your agent's config file. Idempotent — safe to run again.
 
 ```bash
-varve setup              # auto-detect from .claude/, .cursor/, .vscode/, opencode.json, .gemini/
-varve setup claude-code  # .claude/mcp.json
+varve setup              # auto-detect from .claude/, .mcp.json, .cursor/, .vscode/, opencode.json, .gemini/
+varve setup claude-code  # .mcp.json
 varve setup cursor       # .cursor/mcp.json
 varve setup vscode       # .vscode/mcp.json
 varve setup opencode     # opencode.json
 varve setup windsurf     # ~/.codeium/windsurf/mcp_config.json
 varve setup gemini       # .gemini/settings.json
-varve setup --global     # ~/.claude/mcp.json (Claude Code user scope)
+varve setup --global     # ~/.claude.json (Claude Code user scope)
 ```
 
 → See [Agent Setup](setup.md) for details on each agent.
