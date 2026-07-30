@@ -395,9 +395,19 @@ func writeMCPEntry(path, serversKey string, entry map[string]interface{}) (bool,
 		servers = make(map[string]interface{})
 	}
 
-	// Already present — nothing to do
-	if _, exists := servers["varve"]; exists {
-		return false, nil
+	// Present is not the same as correct. This returned early on any existing
+	// `varve` key, so an entry whose command had gone stale — a bare name written
+	// before setup learned to use an absolute path, or a path to a binary that has
+	// since moved — survived every re-run while setup reported "already
+	// configured". Re-running setup is the documented way to repair an agent
+	// config, so it has to actually repair it.
+	if existing, exists := servers["varve"]; exists {
+		if cur, ok := existing.(map[string]interface{}); ok &&
+			fmt.Sprint(cur["command"]) == fmt.Sprint(entry["command"]) {
+			return false, nil
+		}
+		setupNotices = append(setupNotices,
+			"updated the varve server command in "+path+" (it pointed somewhere else)")
 	}
 
 	// A pre-rename `memtrace` entry is replaced, not left beside the new one.

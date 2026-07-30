@@ -440,3 +440,52 @@ func TestServeCommand_UsesAnAbsolutePathEvenWhenPATHResolves(t *testing.T) {
 		t.Errorf("serveCommand() = %q, want an absolute path", got)
 	}
 }
+
+// "already configured" must mean present AND correct. An entry whose command has
+// gone stale — a bare name from before setup used absolute paths, or a path to a
+// binary that has since moved — used to survive every re-run while setup reported
+// success, which makes re-running setup useless as a repair.
+func TestWriteMCPEntry_UpdatesAStaleCommand(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(path,
+		[]byte(`{"mcpServers":{"varve":{"command":"varve","args":["serve"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupNotices = nil
+
+	written, err := writeMCPEntry(path, "mcpServers", map[string]interface{}{
+		"command": "/opt/varve/bin/varve", "args": []string{"serve"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !written {
+		t.Fatal("a stale command was reported as already configured")
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "/opt/varve/bin/varve") {
+		t.Errorf("the stale command was not replaced: %s", data)
+	}
+	if len(setupNotices) == 0 {
+		t.Error("the update was made silently, in a file the user owns")
+	}
+	setupNotices = nil
+}
+
+// An entry that is already correct must still be a no-op, or every setup run
+// rewrites files it did not need to touch.
+func TestWriteMCPEntry_LeavesACorrectEntryAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	os.WriteFile(path, []byte(`{"mcpServers":{"varve":{"command":"/opt/varve/bin/varve","args":["serve"]}}}`), 0o644)
+	setupNotices = nil
+
+	written, err := writeMCPEntry(path, "mcpServers", map[string]interface{}{
+		"command": "/opt/varve/bin/varve", "args": []string{"serve"},
+	})
+	if err != nil || written {
+		t.Fatalf("writeMCPEntry rewrote a correct entry: written=%v err=%v", written, err)
+	}
+	setupNotices = nil
+}
