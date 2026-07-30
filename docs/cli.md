@@ -1,7 +1,11 @@
 # CLI Reference
 
+Every command that takes an ID also takes a unique prefix. For the concepts
+behind the governed commands, see [Decision lifecycle](decisions.md),
+[Attribution](attribution.md) and [Corpus health](lint.md).
+
 ```
-varve init    [--name <name>] [--no-import]
+varve init    [--name <name>] [--no-import] [--no-hooks]
 varve setup   [claude-code|cursor|vscode|opencode|windsurf|gemini] [--global]
 varve save    <content> [--type decision|convention|note] [--tags auth,api] [--files src/auth.go] [--confidence 0.9]
 varve update  <id|prefix> [--content "..."] [--type ...] [--tags ...] [--files ...] [--confidence 0.9]
@@ -17,6 +21,9 @@ varve decision revert <id|prefix>
 varve decision promote <note-id|prefix> [--title "..."] [--kind convention] [--scope "src/**"]
 varve decision purge <id> [--reason secret|cleanup] [--yes]
 varve import  <file|url> [--format json|markdown] [--type decision] [--dry-run]
+varve import  rules|claude-mem|engram [--db <path>] [--dry-run] [--yes] [--as-notes]
+varve import  undo [<batch-id>]
+varve lint    [--format md|json] [--raw] [--aggregate]
 varve browse
 varve serve   [--dir <path>]
 varve status  [--json]
@@ -25,8 +32,9 @@ varve scan    [--backfill] [--limit 500] [--stale]
 varve observe [--commit HEAD] [--quiet]
 varve hooks   install
 varve report  [--days 30] [--format text|md|json] [--decision <id>] [--raw] [--grace 60]
-varve report  coverage [--days 30]
+varve report  coverage [--days 30] [--grace 60]
 varve migrate --from-v1
+varve store   move [--dry-run]
 varve doctor
 varve config  get
 varve config  set <key> <value>
@@ -38,7 +46,11 @@ varve stats   [--days 7] [--json]
 
 ## `varve init`
 
-Initializes varve in the current project. Creates `.varve/varve.db`, adds `.varve/` to `.gitignore`, and appends varve instructions to `CLAUDE.md`.
+Initializes varve in the current project. Creates `.varve/varve.db`, adds
+`.varve/` to `.gitignore` (creating the file if there isn't one — a committed
+store makes `git revert` fail on a file you never edited), appends varve
+instructions to `CLAUDE.md`, and installs the post-commit hook that feeds
+attribution.
 
 Auto-imports from three sources unless `--no-import` is passed:
 - **Claude Code memories** — `~/.claude/projects/<project>/memory/*.md`
@@ -49,7 +61,10 @@ Auto-imports from three sources unless `--no-import` is passed:
 varve init
 varve init --name "my-api"   # override the project name
 varve init --no-import       # skip auto-import
+varve init --no-hooks        # skip the post-commit hook
 ```
+
+Anything imported lands `proposed` — review it with `varve decision pending`.
 
 ---
 
@@ -82,6 +97,29 @@ varve save "We use Postgres 16 with pgvector for embeddings" \
   --tags database,postgres \
   --files src/db/client.go
 ```
+
+A decision **you** save from the CLI is confirmed on the spot — you are the
+confirmation. Only decisions arriving from an agent, an importer or the v1
+migration are quarantined as `proposed`.
+
+For a decision, `--files` takes **scope globs** (`'internal/auth/**'` — quote
+them so the shell doesn't expand them first). For a note they are exact paths.
+Without `--type`, varve saves a note.
+
+---
+
+## `varve update`
+
+Patch a note in place. Only the flags you pass are changed.
+
+```bash
+varve update 01KMDX71NT --content "..." --tags auth,api --confidence 0.8
+```
+
+An accepted decision's content is immutable and its status changes are lifecycle
+transitions, so this command does not edit one — supersede it instead by saving
+a new decision under the same topic key. See
+[Decision lifecycle](decisions.md#superseding).
 
 ---
 
@@ -159,6 +197,9 @@ untouched.
 Acceptance requires at least one evidence row unless `--force` is passed, and a
 forced acceptance is recorded as `"forced": true` on the `decision.accepted`
 event. Rejection is terminal and keeps the record — it is not a delete.
+
+→ [Decision lifecycle](decisions.md) for the states, the transitions and why the
+quarantine exists.
 
 ---
 
@@ -253,6 +294,8 @@ varve lint --aggregate > varve-health.json   # read it, then send it if you want
 
 Nothing is transmitted. There is no endpoint and no telemetry; this writes a
 file you can read in full and choose to share.
+
+→ [Corpus health](lint.md) for what each check covers and how to read the score.
 
 ---
 
@@ -373,6 +416,9 @@ cases; it does not establish what would have happened without the decision.
 
 Rates always carry their sample size, and a rate over fewer than five cases is
 shown as a raw fraction rather than a percentage.
+
+→ [Attribution](attribution.md) for the event chain, the epoch, and the two
+conditions a commit must meet to attribute at all.
 
 ---
 

@@ -1,6 +1,15 @@
 # MCP Tools Reference
 
-Varve exposes eight MCP tools. Your agent calls them directly — no configuration needed beyond `varve setup`.
+Varve exposes eight MCP tools. Your agent calls them directly — no configuration
+needed beyond `varve setup`.
+
+Three of them read context (`memory_pack`, `memory_context`, `memory_recall`),
+three write it (`memory_save`, `memory_update`, `memory_prompt`), one fetches by
+id (`memory_get`), and one disposes (`memory_forget`).
+
+**Governance is not on this surface.** Accepting, rejecting, reverting,
+promoting and purging decisions are CLI actions. An agent can propose and it can
+request disposal; it cannot make something binding or make it go away.
 
 ---
 
@@ -71,71 +80,43 @@ on purpose.
 
 ---
 
-## `memory_save`
+## `memory_context`
 
-Save something worth remembering across sessions.
+Everything relevant to a set of files, volunteered at task start. Combines
+direct file-path and scope-glob matching with semantic recall.
 
 ```
-memory_save(
-  content:    "We use JWT RS256 — stateless API, no session storage",
-  type:       "decision",             // decision | convention | note
-  tags:       ["auth", "security"],
-  file_paths: ["src/middleware/auth.go"],
-  topic_key:  "decision/auth"         // optional — see the topic_key note below
+memory_context(
+  file_paths: ["src/auth/middleware.go", "src/auth/handler.go"],
+  limit:      10        // optional, default 10, max 50
 )
 ```
 
-**Decisions and conventions are governed.** One saved over MCP lands
-`proposed`: it is captured, but it does not bind until a human accepts it
-(`varve decision accept <id>`), and it is never volunteered as context.
+Returns file-matched memories first (labeled `[file match]`), then semantically
+related ones (`[related]`). Each result is a summary — use `memory_get` for full
+content.
 
-Which tool you call decides how you see it:
+**Proposals are never returned as content here.** Because this tool volunteers
+context rather than answering a question, a proposal would arrive looking like
+law. They appear only as a trailing count with their ids, which you can look up
+with `memory_get`.
 
-- `memory_recall` and `memory_get` **answer what you asked** and return
-  proposals, marked `PROPOSED (not accepted by a human; does not bind)`. This
-  is the review surface — treat anything so marked as a pending proposal
-  rather than as law.
-- `memory_context` **volunteers** context at task start, so it never returns a
-  proposal as content. Proposals appear only as a trailing count with their
-  ids, which you can look up with `memory_get` if you need them.
-
-Surface pending proposals to the user instead of assuming the save took effect.
-Acceptance, rejection and disposal are CLI/TUI actions — there is no MCP tool
-for them, by design.
-
-**Parameters**
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `content` | yes | The memory text. Wrap sensitive parts in `<private>...</private>` — they are stripped before storage. |
-| `type` | no | `decision`, `convention` or `note`. `fact` and `event` are accepted as synonyms for `note`. Default: `note`. |
-| `tags` | no | Array of strings for categorization. |
-| `file_paths` | no | Paths relative to project root. Used by `memory_context` to surface this memory when editing related files. |
-| `topic_key` | no | Stable identifier (e.g. `"convention/error-handling"`). **Notes:** re-saving with the same key updates the note in place. **Decisions and conventions:** re-saving creates a *new* `proposed` decision that supersedes the current holder once a human accepts it — the call returns a new id and the earlier decision is not mutated. The two namespaces are separate: a note and a decision may hold the same key. |
-
-**Private content**
-
-```
-memory_save(
-  content: "Auth uses JWT RS256. <private>Signing key: sk-prod-abc123</private> Tokens expire after 1h.",
-  type: "convention"
-)
-// stored as: "Auth uses JWT RS256.  Tokens expire after 1h."
-```
-
-Tags are case-insensitive and support multiline blocks.
+**Pack or context?** `memory_pack` is budget-governed and rank-ordered and tells
+you what it left out — prefer it as the session bootstrap. `memory_context` is
+the simpler "what's linked to these files" lookup.
 
 ---
 
 ## `memory_recall`
 
-Search memories by natural language. Returns summaries — use `memory_get` to read the full content of any result.
+Search memories by natural language. Returns summaries — use `memory_get` to
+read the full content of any result.
 
 ```
 memory_recall(
   query: "authentication approach",
   limit: 10,            // optional, default 10, max 50
-  type:  "decision"     // optional filter
+  type:  "decision"     // optional filter: decision, convention, note
 )
 ```
 
@@ -155,64 +136,136 @@ tags: go, errors
 Call memory_get with an ID to read the full content.
 ```
 
+Recall **does** return proposals, marked `PROPOSED (not accepted by a human;
+does not bind)`. Together with `memory_get` this is the review surface — treat
+anything so marked as a pending proposal rather than as law, and say so to the
+user.
+
+Scoring is BM25 full-text by default; with an embedder configured, semantic
+similarity merges in. See [Semantic Search](embeddings.md).
+
+---
+
+## `memory_save`
+
+Save something worth remembering across sessions.
+
+```
+memory_save(
+  content:    "We use JWT RS256 — stateless API, no session storage",
+  type:       "decision",             // decision | convention | note
+  tags:       ["auth", "security"],
+  file_paths: ["src/middleware/auth.go"],
+  topic_key:  "decision/auth"         // optional — see below
+)
+```
+
+**Decisions and conventions are governed.** One saved over MCP lands
+`proposed`: it is captured, but it does not bind until a human accepts it
+(`varve decision accept <id>`), and it is never volunteered as context.
+
+Surface pending proposals to the user instead of assuming the save took effect.
+
+**Parameters**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `content` | yes | The memory text. Wrap sensitive parts in `<private>...</private>` — they are stripped before storage. |
+| `type` | no | `decision`, `convention` or `note`. `fact` and `event` are accepted as synonyms for `note`. Default: `note`. |
+| `tags` | no | Array of strings for categorization. |
+| `file_paths` | no | For a decision these are **scope globs** (`internal/auth/**`); for a note they are exact paths. A decision with no scope can never be matched to a commit. |
+| `topic_key` | no | Stable identifier. **Notes:** re-saving with the same key updates in place. **Decisions:** re-saving creates a *new* `proposed` successor that supersedes the current holder once accepted — the call returns a new id and the earlier decision is not mutated. The two namespaces are separate. |
+
+**Private content**
+
+```
+memory_save(
+  content: "Auth uses JWT RS256. <private>Signing key: sk-prod-abc123</private> Tokens expire after 1h.",
+  type: "convention"
+)
+// stored as: "Auth uses JWT RS256.  Tokens expire after 1h."
+```
+
+Tags are case-insensitive and support multiline blocks.
+
 ---
 
 ## `memory_get`
 
-Retrieve the full content of a memory by ID. Use this after `memory_recall` or `memory_context`.
+Retrieve the full content of a memory by ID. Use after `memory_recall`,
+`memory_context` or a `memory_pack` footer.
 
 ```
 memory_get(id: "01KMDX71NT...")
 ```
 
----
-
-## `memory_forget`
-
-Delete a memory by ID or by searching for it.
-
-```
-memory_forget(id: "01KMDX71NT...")        // delete by ID
-memory_forget(query: "old jwt approach")  // delete top match
-```
+Returns proposals, marked `PROPOSED`. This is how you read anything a pack
+elided or omitted.
 
 ---
 
 ## `memory_update`
 
-Update an existing memory by ID. Only provided fields are changed — everything else is preserved.
+Patch an existing **note**. Only provided fields change.
 
 ```
 memory_update(
   id:         "01KMDX71NT...",
-  content:    "Updated decision text",
-  type:       "decision",
+  content:    "Updated text",
   tags:       ["auth", "api"],
   file_paths: ["src/auth/middleware.go"],
   confidence: 0.8
 )
 ```
 
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `id` | yes | Full ID. |
+| `content` | no | Replaces the body. Re-embeds asynchronously if an embedder is configured. |
+| `type` | no | Cannot cross the class boundary — see below. |
+| `tags` | no | Replaces the tag list. |
+| `file_paths` | no | Replaces the path list. |
+| `confidence` | no | 0.0–1.0. |
+
+**Two things this tool will not do**, and both return an error rather than
+doing something surprising:
+
+- **It cannot update a decision.** An accepted decision's content is immutable
+  and its status changes are lifecycle transitions. Supersede it by saving a new
+  decision under the same `topic_key`.
+- **It cannot turn a note into a decision.** `varve decision promote <id>` does
+  that, so the decision is born with provenance and a quarantine rather than by
+  rewriting a column. It is a human action.
+
 ---
 
-## `memory_context`
-
-Get all memories relevant to the files you are about to read or edit. Combines direct file-path matching with semantic recall — call this at the start of any task.
+## `memory_forget`
 
 ```
-memory_context(
-  file_paths: ["src/auth/middleware.go", "src/auth/handler.go"],
-  limit:      10
-)
+memory_forget(id: "01KMDX71NT...")        // by ID
+memory_forget(query: "old jwt approach")  // acts on the top match
 ```
 
-Returns file-matched memories first (labeled `[file match]`), followed by semantically related memories (`[related]`). Each result shows a summary — use `memory_get` for full content.
+What actually happens depends on the class:
+
+- **A note is deleted outright.**
+- **A decision or convention is not deleted, rejected or reverted.** The call
+  records a `decision.disposal_requested` event, transitions nothing, and
+  returns the request as pending. "The user wanted this thrown away" is exactly
+  as untrustworthy as "the user approved."
+
+Tell the user the request is waiting for them. They confirm it with
+`varve decision reject <id>` while the decision is proposed, or
+`varve decision revert <id>` once it is binding — or they ignore it, and nothing
+happens.
 
 ---
 
 ## `memory_prompt`
 
-Capture the user's original request at the very start of a session, before any other memory operations. Stored as an `event` tagged `prompt` so future sessions can understand what was attempted and why.
+Capture the user's original request at the very start of a session, before any
+other memory operation, so future sessions can understand what was attempted and
+why.
 
 ```
 memory_prompt(
@@ -221,13 +274,17 @@ memory_prompt(
 )
 ```
 
+Stored as a note tagged `prompt`.
+
 ---
 
-## Memory types
+## What the agent is told
 
-| Type | Use for |
-|------|---------|
-| `decision` | Architecture choices, tooling selections, approach rationale |
-| `convention` | Naming rules, code style, structural standards |
-| `fact` | Durable truths about the codebase |
-| `event` | Migrations, incidents, refactors, session summaries |
+`varve setup` writes an instruction block into your agent's rules file
+(`CLAUDE.md`, `.cursor/rules/varve.mdc`, `GEMINI.md`, …) describing these tools
+*and* what actually happens when they are called — that a saved decision is
+proposed and waiting, that forgetting one files a request, that a pack footer is
+where elided content is named.
+
+Without it, agents reliably report proposals as adopted. See
+[Agent Setup](setup.md).

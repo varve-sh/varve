@@ -2,13 +2,21 @@
 
 `memory_recall` and `varve search` use **hybrid BM25 + semantic scoring** when an embedder is configured. The pipeline runs full-text search and vector similarity independently, merges the candidate pools, and reranks — so memories that match on meaning but not exact keywords still surface.
 
-Without an embedder, varve falls back to BM25-only search, which is still fast and useful.
+**Embeddings are optional and off unless something is configured.** Out of the box varve is BM25-only, which is fast, fully local, and enough for most stores. Nothing else degrades without them: `memory_pack` selects by scope glob and rank, `memory_context` by file match, and attribution never uses embeddings at all.
+
+Check what is active:
+
+```bash
+varve status     # or: varve doctor
+# Embeddings: disabled (BM25-only search)
+# Embeddings: ollama (nomic-embed-text)
+```
 
 ---
 
 ## Zero-config with Ollama
 
-If [Ollama](https://ollama.com) is running locally, varve detects it automatically — no configuration needed:
+If [Ollama](https://ollama.com) is running locally, varve detects it automatically — it probes `localhost:11434` at startup with a 500 ms timeout and uses it if it answers. No configuration needed:
 
 ```bash
 ollama pull nomic-embed-text
@@ -76,11 +84,15 @@ Add `env` to your MCP config entry so the key is available when `varve serve` ru
 
 ## Backfilling existing memories
 
-Memories saved before an embedder was configured have no stored vector. Run `reindex` once to backfill:
+Memories saved before an embedder was configured have no stored vector — they are still found by BM25, just not by meaning. Run `reindex` once to backfill:
 
 ```bash
 varve reindex
 ```
+
+It embeds every active memory with a missing embedding, and needs a configured
+API key (`VARVE_EMBED_KEY`, or `OPENAI_API_KEY`) unless you are pointing at a
+local server that does not require one.
 
 ---
 
