@@ -17,7 +17,9 @@ clean:
 	rm -rf bin/ dist/
 
 install: build
+	@mkdir -p $(shell go env GOPATH)/bin
 	cp bin/$(BINARY) $(shell go env GOPATH)/bin/$(BINARY)
+	@command -v $(BINARY) >/dev/null 2>&1 || printf '\ninstalled to %s/bin/%s, but that directory is not on your PATH.\nadd it:  export PATH="$$PATH:%s/bin"\n\n' "$(shell go env GOPATH)" "$(BINARY)" "$(shell go env GOPATH)"
 
 tidy:
 	go mod tidy
