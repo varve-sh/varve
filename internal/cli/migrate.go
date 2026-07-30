@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/varve-sh/varve/internal/kernel"
@@ -47,20 +49,59 @@ func newMigrateCmd() *cobra.Command {
 			if projectRoot == "" {
 				return types.ErrNotInitialized
 			}
+			// Deliberately NOT requiring a config entry.
+			//
+			// It used to, and that produced a first-run deadlock for exactly the
+			// population this command exists for: `migrate --from-v1` said "run
+			// varve init first", and `init` said "this is a v1 database — run
+			// migrate --from-v1". Each pointed at the other, and every user
+			// upgrading from memtrace hit it. Found by dogfooding a clone with a
+			// copy of a real v1 store.
+			//
+			// The dependency was backwards. Migration is a repair operation on a
+			// store that already exists, and the id it needs is in that store —
+			// ProjectIDInStore reads it. Registration is a consequence of a
+			// successful migration, not a precondition for attempting one.
+			dbPath := util.GetProjectDbPath(projectRoot)
 			cfg := util.GetProjectConfig()
-			entry, ok := cfg.Projects[projectRoot]
-			if !ok {
-				return types.ErrNotInitialized
+			entry, registered := cfg.Projects[projectRoot]
+
+			projectID := entry.ID
+			if !registered {
+				projectID, err = kernel.ProjectIDInStore(dbPath)
+				if err != nil {
+					return fmt.Errorf("inspecting the store: %w", err)
+				}
+				if projectID == "" {
+					return fmt.Errorf("no varve store found at %s — run `varve init` to create one", dbPath)
+				}
 			}
 
 			report, err := kernel.MigrateFromV1(kernel.MigrateV1Options{
-				DBPath:    util.GetProjectDbPath(projectRoot),
-				ProjectID: entry.ID,
+				DBPath:    dbPath,
+				ProjectID: projectID,
 			})
 			if err != nil {
 				return err
 			}
+
+			// Register only now, adopting the id the migrated rows carry.
+			name := filepath.Base(projectRoot)
+			if !registered {
+				cfg.Projects[projectRoot] = util.ProjectEntry{
+					ID:        projectID,
+					Name:      name,
+					CreatedAt: time.Now().UTC().Format(time.RFC3339),
+				}
+				if err := util.SaveProjectConfig(cfg); err != nil {
+					return fmt.Errorf("registering the migrated project: %w", err)
+				}
+			}
 			fmt.Print(report.String())
+			if !registered {
+				fmt.Printf("registered project %q (id %s, adopted from the store)\n",
+					name, projectID)
+			}
 			return nil
 		},
 	}

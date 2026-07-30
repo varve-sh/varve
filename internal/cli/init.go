@@ -66,6 +66,16 @@ func newInitCmd() *cobra.Command {
 					projectID = util.GenerateID()
 				}
 
+				// Open BEFORE registering. The other order wrote the config entry
+				// and then failed on a v1 store, so a user who saw an error had
+				// nonetheless been registered — invisible partial state on an error
+				// path, and the reason a later `migrate` appeared to work by
+				// accident. Nothing is written unless the store opens.
+				k := kernel.New(dbPath, projectID)
+				if err := k.Open(); err != nil {
+					return err
+				}
+				k.Close()
 				cfg.Projects[projectRoot] = util.ProjectEntry{
 					ID:        projectID,
 					Name:      projectName,
@@ -74,11 +84,6 @@ func newInitCmd() *cobra.Command {
 				if err := util.SaveProjectConfig(cfg); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
-				k := kernel.New(dbPath, projectID)
-				if err := k.Open(); err != nil {
-					return fmt.Errorf("initializing database: %w", err)
-				}
-				k.Close()
 				if adopted {
 					fmt.Printf("Re-registered varve project in %s (adopted the existing store's id %s)\n",
 						projectRoot, projectID)

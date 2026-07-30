@@ -304,3 +304,75 @@ func TestMigrateCmd_MigratedRowsAreVisibleToEveryReadPath(t *testing.T) {
 		t.Errorf("`status` reports an empty store after migration:\n%s", out)
 	}
 }
+
+// A first-run deadlock, found by dogfooding a clone with a copy of a real v1
+// store: `migrate --from-v1` required a config entry and said "run varve init
+// first", while `init` on a v1 store said "run migrate --from-v1". Each pointed
+// at the other, and every user upgrading from memtrace hit it.
+//
+// The dependency was backwards. Migration repairs a store that already exists,
+// and the id it needs lives in that store.
+func TestMigrateFromV1_WorksWithNoPriorInit(t *testing.T) {
+	root, ids := setupV1Project(t)
+
+	// Un-register the project, leaving only the v1 store on disk — the state a
+	// user upgrading from memtrace is actually in.
+	cfg := util.GetProjectConfig()
+	delete(cfg.Projects, root)
+	if err := util.SaveProjectConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	out, err := runCmd(t, "migrate", "--from-v1")
+	if err != nil {
+		t.Fatalf("migrate on an unregistered v1 store: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "registered project") {
+		t.Errorf("migration did not register the project it just converted:\n%s", out)
+	}
+
+	// Registered with the id the rows carry, or every migrated row is invisible.
+	// Asserted on content, not on the v1 ids: §D9's conversion mints new ULIDs,
+	// which is why the established visibility test also matches text.
+	entry, ok := util.GetProjectConfig().Projects[root]
+	if !ok {
+		t.Fatal("project still unregistered after a successful migration")
+	}
+	listed, err := runCmd(t, "list", "--limit", "100")
+	if err != nil {
+		t.Fatalf("list after migrate: %v", err)
+	}
+	for _, want := range []string{
+		"Use ULIDs everywhere.",      // active decision
+		"Wrap errors with %w.",       // convention
+		"CI runs on arm64.",          // note
+		"Cache TTL is five minutes.", // stale -> proposed
+	} {
+		if !strings.Contains(listed, want) {
+			t.Errorf("%q is invisible after migrating an unregistered store "+
+				"(registered project id %s):\n%s", want, entry.ID, listed)
+		}
+	}
+	_ = ids
+}
+
+// init used to save the config entry and then open the store, so a v1 database
+// left the user registered while showing an error. Invisible partial state on an
+// error path — and the reason an earlier migrate appeared to work by accident.
+func TestInit_WritesNoConfigEntryWhenTheStoreCannotBeOpened(t *testing.T) {
+	root, _ := setupV1Project(t)
+	cfg := util.GetProjectConfig()
+	delete(cfg.Projects, root)
+	if err := util.SaveProjectConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	if _, err := runCmd(t, "init"); err == nil {
+		t.Fatal("init succeeded on a v1 store; it should refuse and point at migrate")
+	}
+	if _, ok := util.GetProjectConfig().Projects[root]; ok {
+		t.Error("init failed but left a config entry behind — partial state on an error path")
+	}
+}
