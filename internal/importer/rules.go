@@ -14,7 +14,21 @@ import (
 var RulesFiles = []string{"CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md", ".cursorrules"}
 
 // ProbeRules reports the rules files present in a repo and how many blocks
-// each holds.
+// each holds — counting only blocks the importer would actually import.
+//
+// The probe used to count every block, including varve's own instruction
+// section, which ImportRulesFile has always skipped (F47). On a first run those
+// two disagreements met: `varve init` writes the instruction block into
+// CLAUDE.md, then probes, then announces "Found existing memory: CLAUDE.md 1
+// block — import it with varve import rules", and `varve import rules` replies
+// "Nothing to import — no candidates found in the requested sources". The very
+// first sequence in the README told the user to run a command that could not do
+// anything, over a file varve had just written itself.
+//
+// Filtering here rather than reordering init's steps is deliberate: `varve
+// setup` writes the same block, so any ordering fix inside init would still
+// mis-announce for a user who ran setup first. A probe that counts what the
+// importer imports cannot drift from it whatever wrote the file.
 func ProbeRules(root string) []Probe {
 	var out []Probe
 	for _, rel := range RulesFiles {
@@ -23,10 +37,20 @@ func ProbeRules(root string) []Probe {
 		if err != nil {
 			continue
 		}
-		blocks := splitBlocks(string(data))
+		importable := 0
+		for _, b := range splitBlocks(string(data)) {
+			if !IsToolInstructionBlock(b.title, b.body) {
+				importable++
+			}
+		}
+		// A file holding nothing but our own instructions is not "existing
+		// memory" to offer; it is the thing we just installed.
+		if importable == 0 {
+			continue
+		}
 		out = append(out, Probe{
 			Source: rel, Available: true, Path: path,
-			Count: len(blocks), Detail: plural(len(blocks), "block"),
+			Count: importable, Detail: plural(importable, "block"),
 		})
 	}
 	if mdc := cursorRuleFiles(root); len(mdc) > 0 {
